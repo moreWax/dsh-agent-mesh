@@ -120,12 +120,13 @@ export class SamToolsProvider {
 }
 
 function createDefinition(mesh: AgentMeshService, summary: ToolSummary, description: ToolDescription, name: string, labels?: RequiredLabelsAnyOf): ToolDefinition {
-  assertSupportedJsonSchema(description.inputSchema)
+  const inputSchema = supportedSchema(description.inputSchema)
+  if (!inputSchema) throw new TypeError(`SAM remote tool ${description.uri} returned an unsupported input schema`)
   const outputSchema = supportedSchema(description.outputSchema)
   return {
     name,
     description: description.description ?? summary.description ?? `SAM remote tool ${description.uri} on ${description.peerId}`,
-    parameters: description.inputSchema,
+    parameters: inputSchema as Record<string, unknown>,
     output: {
       schema: {
         type: 'object',
@@ -157,7 +158,10 @@ function createDefinition(mesh: AgentMeshService, summary: ToolSummary, descript
 
 function supportedSchema(value: unknown): JsonSchemaNode | undefined {
   if (value === undefined) return undefined
-  try { assertSupportedJsonSchema(value); return value as JsonSchemaNode } catch { return undefined }
+  try { assertSupportedJsonSchema(value); return value as JsonSchemaNode } catch { /* normalize common dialect metadata */ }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const { $schema: _dialect, $id: _id, ...schema } = value as Record<string, unknown>
+  try { assertSupportedJsonSchema(schema); return schema as JsonSchemaNode } catch { return undefined }
 }
 function jsonResult(result: CallToolResult): JsonValue {
   const projected = { content: result.content, ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }) }

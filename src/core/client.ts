@@ -97,7 +97,7 @@ export class SamClient {
   async discoverRemoteServices(filter: ServiceFilter = {}): Promise<RemoteService[]> { return this.#tool<RemoteService[]>("discover_remote_services", filter); }
   async findRemoteTools(filter: ToolFilter = {}, signal?: AbortSignal): Promise<RemoteTool[]> { return this.#tool<RemoteTool[]>("find_remote_tools", filter, signal); }
   async describeRemoteTool(input: DescribeRemoteToolRequest, signal?: AbortSignal): Promise<RemoteTool> { return this.#tool<RemoteTool>("describe_remote_tool", input, signal); }
-  async callRemoteTool(input: CallRemoteToolRequest, signal?: AbortSignal): Promise<McpToolResult> { return this.#tool<McpToolResult>("call_remote_tool", { ...input, arguments: input.arguments ?? {} }, signal); }
+  async callRemoteTool(input: CallRemoteToolRequest, signal?: AbortSignal): Promise<McpToolResult> { return this.#tool<McpToolResult>("call_remote_tool", { ...input, arguments: input.arguments ?? {} }, signal, true); }
   async probe(): Promise<MeshInfo> { return this.getMeshInfo(); }
   async callTool<T>(name: string, args: Record<string, unknown>): Promise<T> { return this.#tool<T>(name, args); }
   async listModels(): Promise<ModelList> { return this.request<ModelList>("/v1/models"); }
@@ -108,7 +108,7 @@ export class SamClient {
     return this.request<ChatCompletionResponse>("/v1/chat/completions", { method: "POST", body: input, serviceHeaders, ...(options.signal ? { signal: options.signal } : {}) });
   }
 
-  async #tool<T>(name: string, args: object, signal?: AbortSignal): Promise<T> {
+  async #tool<T>(name: string, args: object, signal?: AbortSignal, preserveResult = false): Promise<T> {
     const session = await this.#ensureMcpSession();
     const envelope = await this.request<{ jsonrpc?: string; result?: McpToolResult; error?: { code: number; message: string; data?: unknown } }>("/mcp", {
       method: "POST", body: { jsonrpc: "2.0", id: `${Date.now()}-${Math.random()}`, method: "tools/call", params: { name, arguments: args } },
@@ -118,6 +118,7 @@ export class SamClient {
     if (envelope.error) throw new SamRpcError(envelope.error.message, envelope.error.code, envelope.error.data);
     if (!envelope.result) throw new SamProtocolError(`MCP response for ${name} has no result`, envelope);
     if (envelope.result.isError) throw new SamProtocolError(`SAM tool ${name} failed`, envelope.result);
+    if (preserveResult) return envelope.result as T;
     const structured = envelope.result.structuredContent;
     if (structured !== undefined) return structured as T;
     const text = envelope.result.content?.find((item) => item.type === "text")?.text;

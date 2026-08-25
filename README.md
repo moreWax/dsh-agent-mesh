@@ -30,3 +30,16 @@ plan setup, but destructive reset or interactive enrollment remains human-approv
 Discovery labels are routing hints. Calls that request labels rely on SAM's
 control-plane-signed Biscuit preflight before request bytes leave the node.
 Current SAM label matching is any-of; this package names it `requiredLabelsAnyOf`.
+
+## Live acceptance
+
+With `SAM_LIVE=1`, the suite validates the running node end-to-end: native
+`ctx.tools` projection and remote echo execution, model inventory, streaming
+inference, pinned proxy routing, and fail-closed impossible-label denial.
+
+## Durable task service
+
+`./tasks` includes `TaskService`, a pluggable atomic `TaskStore`, and an
+`InMemoryTaskStore` reference implementation. It exposes the SAM-over-MCP
+`task_submit/get/watch/cancel/collect` vocabulary with idempotency, CAS claims,
+deadlines, cancellation, event cursors, artifacts and structured errors.
