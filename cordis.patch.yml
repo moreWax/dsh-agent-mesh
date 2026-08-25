@@ -1,5 +1,5 @@
 # SAM-native mesh capability. Initial bundle mounts the core integration;
-# tool/inference/task providers are enabled as their dsh seam adapters land.
+# The LLM adapter is a separate Cordis plugin so the core capability service remains optional.
 - insert:
     - id: agent-mesh
       name: '@morewax/dsh-agent-mesh'
@@ -7,3 +7,21 @@
         socketPath: ~/.config/sam-mesh/sam.sock
         tcpUrl: http://127.0.0.1:8080
         preferSocket: true
+
+- insert:
+    - id: agent-mesh-llm
+      name: '@morewax/dsh-agent-mesh/llm'
+      config:
+        socketPath: ~/.config/sam-mesh/sam.sock
+        tcpUrl: http://127.0.0.1:8080
+        preferSocket: true
+        route:
+          mode: auto
+
+- insert:
+    - id: agent-mesh-tools
+      name: '@morewax/dsh-agent-mesh/providers/tools'
+      config:
+        requiredLabelsAnyOf: []
+        refreshIntervalMs: 60000
+        failOnStartupError: false

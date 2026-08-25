@@ -12,7 +12,10 @@
     "./tools": "./lib/tools/index.js",
     "./inference": "./lib/inference/index.js",
     "./tasks": "./lib/tasks/index.js",
-    "./operator": "./lib/operator/index.js"
+    "./operator": "./lib/operator/index.js",
+    "./llm": "./lib/llm/index.js",
+    "./providers": "./lib/providers/index.js",
+    "./providers/tools": "./lib/providers/tools-plugin.js"
   },
   "files": [
     "lib",
@@ -42,7 +45,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/core/index.ts src/tools/index.ts src/inference/index.ts src/tasks/index.ts src/operator/index.ts --format esm --dts --out-dir lib",
+    "build": "tsdown src/index.ts src/core/index.ts src/tools/index.ts src/inference/index.ts src/tasks/index.ts src/operator/index.ts src/providers/index.ts src/providers/tools-plugin.ts src/llm/index.ts --format esm --dts --out-dir lib",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
@@ -50,10 +53,24 @@
     "@deepseek-ai/schemastery": "3.18.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1"
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": ">=0.1.1-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.1.1-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-attachment": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-brand": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-code-runtime": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-invariants": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-llm": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-scope": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-session": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-timeout": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.0.1-rc.1",
     "@types/node": "^24.0.0",
     "tsdown": "^0.15.0",
     "typescript": "^5.9.0",

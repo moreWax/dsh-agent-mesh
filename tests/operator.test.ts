@@ -3,20 +3,21 @@ import { MeshOperator, parseServiceRegistrationRequest, planNodeReset, planSamNo
 import type { SamCore } from "../src/operator/index.js"
 
 function fixture() {
-  const callTool = vi.fn(async () => ({ state: "online" }))
-  const core = { callTool, request: vi.fn() } as unknown as SamCore
-  return { operator: new MeshOperator(core), callTool }
+  const callTool = vi.fn(async (_name: string, _args: Record<string, unknown>, _signal?: AbortSignal) => ({ state: "online" }))
+  const coreRequest = vi.fn(async () => ({ id: "service-1", name: "search" }))
+  const core = { callTool, request: coreRequest } as unknown as SamCore
+  return { operator: new MeshOperator(core), callTool, coreRequest }
 }
 describe("MeshOperator", () => {
   it("delegates reads to the abstract core", async () => {
     const { operator, callTool } = fixture()
     await operator.status()
-    expect(callTool).toHaveBeenCalledWith("node.status", {}, undefined)
+    expect(callTool).toHaveBeenCalledWith("get_mesh_info", {}, undefined)
   })
   it("validates and delegates service registration", async () => {
-    const { operator, callTool } = fixture()
-    await operator.registerService({ name: "search", protocol: "mcp", endpoint: "sam://peer/search", ignored: "x" })
-    expect(callTool).toHaveBeenCalledWith("service.register", { name: "search", protocol: "mcp", endpoint: "sam://peer/search" }, undefined)
+    const { operator, coreRequest } = fixture()
+    await operator.registerService({ name: "search", protocol: "mcp", endpoint: "http://127.0.0.1:9000/mcp", ignored: "x" })
+    expect(coreRequest).toHaveBeenCalledWith("/sam/service/register", { method: "POST", body: { service: { name: "search", type: "mcp" }, target_url: "http://127.0.0.1:9000/mcp" }, signal: undefined })
   })
   it("builds install plans but never executes them", () => {
     const { operator, callTool } = fixture()
@@ -35,4 +36,28 @@ describe("command safety", () => {
 })
 describe("schemas", () => {
   it("rejects missing required fields", () => expect(() => parseServiceRegistrationRequest({ name: "x" })).toThrow())
+  it("rejects service targets with credentials or non-HTTP schemes", () => {
+    expect(() => parseServiceRegistrationRequest({ name: "x", protocol: "mcp", endpoint: "file:///etc/passwd" })).toThrow()
+    expect(() => parseServiceRegistrationRequest({ name: "x", protocol: "mcp", endpoint: "http://user:pass@localhost" })).toThrow()
+  })
+})
+
+
+describe("operator checkup and setup", () => {
+  it("runs the documented SAM diagnostic tools and retains partial failures", async () => {
+    const { operator, callTool } = fixture()
+    callTool.mockRejectedValueOnce(new Error("node unavailable"))
+    const report = await operator.checkup()
+    expect(callTool.mock.calls.map((call) => call[0])).toEqual(["get_mesh_info", "get_network_info", "get_token_info", "list_local_services"])
+    expect(report.healthy).toBe(false)
+    expect(report.failures[0]?.message).toBe("node unavailable")
+  })
+  it("only plans mutating setup actions and never executes them", () => {
+    const { operator, callTool, coreRequest } = fixture()
+    const plan = operator.setup({ createConfig: true, startNode: true })
+    expect(plan.commands.map((command) => command.args)).toEqual([["init"], ["run"]])
+    expect(plan.readyToExecute).toBe(false)
+    expect(callTool).not.toHaveBeenCalled()
+    expect(coreRequest).not.toHaveBeenCalled()
+  })
 })

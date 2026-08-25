@@ -7,9 +7,9 @@ import type {
 } from './types.js'
 
 export interface ToolClientCore {
-  findRemoteTools(filter?: Record<string, string>): Promise<unknown>
-  describeRemoteTool(input: { peer_id: string; tool_name: string }): Promise<unknown>
-  callRemoteTool(input: { peer_id: string; tool_name: string; arguments: Record<string, unknown>; required_labels?: string }): Promise<unknown>
+  findRemoteTools(filter?: Record<string, string>, signal?: AbortSignal): Promise<unknown>
+  describeRemoteTool(input: { peer_id: string; tool_name: string }, signal?: AbortSignal): Promise<unknown>
+  callRemoteTool(input: { peer_id: string; tool_name: string; arguments: Record<string, unknown>; required_labels?: string }, signal?: AbortSignal): Promise<unknown>
 }
 
 export class ToolClientError extends Error {
@@ -37,21 +37,21 @@ export class ToolClient {
     this.#now = options.now ?? Date.now
   }
 
-  async discover(options: DiscoverToolsOptions = {}): Promise<ToolSearchResult> {
+  async discover(options: DiscoverToolsOptions = {}, signal?: AbortSignal): Promise<ToolSearchResult> {
     const request: Record<string, string> = {}
     if (options.intent !== undefined) request.intent = options.intent
     if (options.peerId !== undefined) request.peer_id = options.peerId
     if (options.serviceName !== undefined) request.service_name = normalizeService(options.serviceName)
     if (options.toolName !== undefined) request.tool_name = options.toolName
     let wire: unknown
-    try { wire = await this.core.findRemoteTools(request) }
+    try { wire = await this.core.findRemoteTools(request, signal) }
     catch (error) { throw mapToolError(error) }
     return normalizeSearch(wire)
   }
 
-  find(options: DiscoverToolsOptions = {}): Promise<ToolSearchResult> { return this.discover(options) }
+  find(options: DiscoverToolsOptions = {}, signal?: AbortSignal): Promise<ToolSearchResult> { return this.discover(options, signal) }
 
-  async describe(peerId: string, uri: string, options: DescribeToolOptions = {}): Promise<ToolDescription> {
+  async describe(peerId: string, uri: string, options: DescribeToolOptions = {}, signal?: AbortSignal): Promise<ToolDescription> {
     const identity = toolIdentity(peerId, uri)
     const key = cacheKey(peerId, identity.uri)
     const now = this.#now()
@@ -61,7 +61,7 @@ export class ToolClient {
       return { ...cached.value, fromCache: true }
     }
     let wire: unknown
-    try { wire = await this.core.describeRemoteTool({ peer_id: peerId, tool_name: identity.uri }) }
+    try { wire = await this.core.describeRemoteTool({ peer_id: peerId, tool_name: identity.uri }, signal) }
     catch (error) { throw mapToolError(error) }
     const row = asObject(wire)
     const inputSchema = schema(row.input_schema ?? row.inputSchema)
@@ -78,15 +78,15 @@ export class ToolClient {
     return description
   }
 
-  async call(peerId: string, uri: string, arguments_: JsonObject = {}, options: CallToolOptions = {}): Promise<CallToolResult> {
+  async call(peerId: string, uri: string, arguments_: JsonObject = {}, options: CallToolOptions = {}, signal?: AbortSignal): Promise<CallToolResult> {
     const identity = toolIdentity(peerId, uri)
     if (options.revalidateSchema !== false) {
-      await this.describe(peerId, uri, { maxAgeMs: options.schemaMaxAgeMs ?? this.#ttl })
+      await this.describe(peerId, uri, { maxAgeMs: options.schemaMaxAgeMs ?? this.#ttl }, signal)
     }
     const request: Record<string, unknown> = { peer_id: peerId, tool_name: identity.uri, arguments: arguments_ }
     const required = encodeRequiredLabels(options.requiredLabelsAnyOf)
     const callRequest = { peer_id: peerId, tool_name: identity.uri, arguments: arguments_ as Record<string, unknown>, ...(required ? { required_labels: required } : {}) }
-    try { return await this.core.callRemoteTool(callRequest) as CallToolResult }
+    try { return await this.core.callRemoteTool(callRequest, signal) as CallToolResult }
     catch (error) { throw mapToolError(error) }
   }
 

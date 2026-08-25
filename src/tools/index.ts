@@ -1,5 +1,5 @@
 export * from './types.js'
 export * from './identity.js'
 export * from './client.js'
-export { SamToolClient } from './sam-tool-client.js'
-export type { SamToolTransport } from './sam-tool-client.js'
+export { ToolClient as SamToolClient } from './client.js'
+export type { ToolClientCore as SamToolTransport } from './client.js'

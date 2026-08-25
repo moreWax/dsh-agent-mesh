@@ -23,3 +23,20 @@ export interface CommandApproval { approved: true; approvedBy: string; approvedA
 export interface CliCommandPlan { executable: "sam-node"; args: readonly string[]; display: string; risk: CliRisk; requiresApproval: boolean; approved: boolean; warnings: readonly string[] }
 export interface SkillInstallRequest { source: string; name?: string; version?: string; target?: string; force?: boolean }
 export interface SkillInstallPlan { command: CliCommandPlan; request: Readonly<SkillInstallRequest> }
+
+
+/** Parsed, transport-safe plugin configuration. */
+export interface AgentMeshConfig { socketPath: string | false; tcpUrl: string; preferSocket: boolean; apiToken?: string; timeoutMs: number }
+export interface AgentMeshConfigInput { socketPath?: string | false; tcpUrl?: string; preferSocket?: boolean; apiToken?: string; timeoutMs?: number }
+
+export interface ServiceRegistrationResponse { id?: string; service?: MeshService; [key: string]: unknown }
+export interface SetupOptions { createConfig?: boolean; startNode?: boolean }
+export interface SetupPlan { readonly commands: readonly CliCommandPlan[]; readonly readyToExecute: boolean; readonly warnings: readonly string[] }
+export interface MeshCheckup { healthy: boolean; mesh: unknown; network?: unknown; token?: unknown; services?: readonly MeshService[]; failures: readonly Diagnostic[]; capturedAt: string }
+
+/** Cordis-facing, read-only operational surface. */
+export interface AgentMeshStatusService {
+  status(signal?: AbortSignal): Promise<MeshCheckup>
+  checkup(signal?: AbortSignal): Promise<MeshCheckup>
+  setup(options?: SetupOptions): SetupPlan
+}

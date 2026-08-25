@@ -9,7 +9,12 @@ const requiredString = (o: Record<string, unknown>, key: string): string => {
 /** Parse untrusted input into a registration request. Unknown fields are discarded. */
 export function parseServiceRegistrationRequest(value: unknown): ServiceRegistrationRequest {
   if (!record(value)) throw new TypeError("service registration must be an object")
-  const output: ServiceRegistrationRequest = { name: requiredString(value, "name"), protocol: requiredString(value, "protocol"), endpoint: requiredString(value, "endpoint") }
+  const endpoint = requiredString(value, "endpoint")
+  let target: URL
+  try { target = new URL(endpoint) } catch { throw new TypeError("endpoint must be an absolute HTTP URL") }
+  if (target.protocol !== "http:" && target.protocol !== "https:") throw new TypeError("endpoint must use http or https")
+  if (target.username || target.password) throw new TypeError("endpoint must not contain credentials")
+  const output: ServiceRegistrationRequest = { name: requiredString(value, "name"), protocol: requiredString(value, "protocol"), endpoint: target.toString() }
   if (value.metadata !== undefined) {
     if (!record(value.metadata)) throw new TypeError("metadata must be an object")
     output.metadata = value.metadata
