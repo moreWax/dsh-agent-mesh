@@ -1,0 +1,9 @@
+# SAM-native mesh capability. Initial bundle mounts the core integration;
+# tool/inference/task providers are enabled as their dsh seam adapters land.
+- insert:
+    - id: agent-mesh
+      name: '@morewax/dsh-agent-mesh'
+      config:
+        socketPath: ~/.config/sam-mesh/sam.sock
+        tcpUrl: http://127.0.0.1:8080
+        preferSocket: true

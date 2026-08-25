@@ -1,0 +1,63 @@
+{
+  "name": "@morewax/dsh-agent-mesh",
+  "version": "0.1.0",
+  "description": "SAM-native capability mesh for DeepSeek Harness: tools, inference, tasks, node operations, and policy-aware routing",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": "./lib/index.js",
+    "./core": "./lib/core/index.js",
+    "./tools": "./lib/tools/index.js",
+    "./inference": "./lib/inference/index.js",
+    "./tasks": "./lib/tasks/index.js",
+    "./operator": "./lib/operator/index.js"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "sam",
+    "sovereign-agent-mesh",
+    "mcp",
+    "libp2p"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moreWax/dsh-agent-mesh.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/core/index.ts src/tools/index.ts src/inference/index.ts src/tasks/index.ts src/operator/index.ts --format esm --dts --out-dir lib",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@types/node": "^24.0.0",
+    "tsdown": "^0.15.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "yaml": "^2.8.0"
+  }
+}
