@@ -137,6 +137,8 @@ export class TaskService {
   private readonly pending: string[] = []
   private readonly pendingSet = new Set<string>()
   private readonly controllers = new Map<string, AbortController>()
+  private accepting = true
+  private readonly idleWaiters = new Set<() => void>()
 
   constructor(readonly store: TaskStore, readonly executor: TaskExecutor, options: TaskServiceOptions = {}) {
     this.concurrency = options.concurrency ?? 4
@@ -144,6 +146,7 @@ export class TaskService {
     this.now = options.now ?? (() => new Date()); this.id = options.id ?? randomUUID; this.autoStart = options.autoStart ?? true
   }
   async task_submit(request: SubmitTaskRequest): Promise<SubmitTaskResponse> {
+    if (!this.accepting) throw protocol('TASK_SERVICE_STOPPING', 'Task service is shutting down', true)
     if (!request.idempotencyKey) throw protocol('TASK_IDEMPOTENCY_KEY_REQUIRED', 'idempotencyKey is required')
     const deadline = request.deadline === undefined ? undefined : this.parseDeadline(request.deadline)
     const at = this.now().toISOString(); const taskId = this.id()
@@ -222,6 +225,17 @@ export class TaskService {
       return this.finish(taskId, 'failed', undefined, this.error(cause))
     } finally { if (timer) clearTimeout(timer); this.controllers.delete(taskId) }
   }
+  /** Stop admission, cancel queued/running work, and wait boundedly for executors to settle. */
+  async shutdown(options: { waitMs?: number } = {}): Promise<void> {
+    this.accepting = false
+    const ids = [...this.pending]
+    this.pending.length = 0; this.pendingSet.clear()
+    await Promise.all(ids.map(id => this.task_cancel({ taskId: id, reason: 'Task service is shutting down' }).catch(() => undefined)))
+    for (const controller of this.controllers.values()) controller.abort(protocol('TASK_SERVICE_STOPPING', 'Task service is shutting down', true))
+    if (this.active === 0) return
+    const waitMs = options.waitMs ?? 5_000
+    await new Promise<void>(resolve => { const done = (): void => { clearTimeout(timer); this.idleWaiters.delete(done); resolve() }; const timer = setTimeout(done, waitMs); this.idleWaiters.add(done) })
+  }
   /** Tool-caller compatible dispatch surface for MCP/dsh adapters. */
   async callTool(name: string, arguments_: JsonObject, options?: { signal?: AbortSignal }): Promise<unknown> {
     switch (name) {
@@ -234,7 +248,7 @@ export class TaskService {
     }
   }
   private enqueue(taskId: string): void { if (this.pendingSet.has(taskId)) return; this.pendingSet.add(taskId); this.pending.push(taskId); this.pump() }
-  private pump(): void { while (this.active < this.concurrency) { const id = this.pending.shift(); if (!id) return; this.pendingSet.delete(id); this.active++; void this.execute(id).finally(() => { this.active--; this.pump() }) } }
+  private pump(): void { while (this.active < this.concurrency) { const id = this.pending.shift(); if (!id) return; this.pendingSet.delete(id); this.active++; void this.execute(id).finally(() => { this.active--; if (this.active === 0) { for (const resolve of this.idleWaiters) resolve(); this.idleWaiters.clear() } this.pump() }) } }
   private async required(taskId: string): Promise<StoredTask> { const record = await this.store.get(taskId); if (!record) throw protocol('TASK_NOT_FOUND', `Task ${taskId} was not found`); return record }
   private parseDeadline(value: string): number { const time = Date.parse(value); if (!Number.isFinite(time)) throw protocol('TASK_DEADLINE_INVALID', 'deadline must be an ISO-8601 timestamp'); return time }
   private wait(value?: number): number { const n = value ?? 0; if (!Number.isSafeInteger(n) || n < 0) throw protocol('TASK_WAIT_INVALID', 'waitMs must be a non-negative safe integer'); return n }

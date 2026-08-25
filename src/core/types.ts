@@ -17,7 +17,14 @@ export interface ChatCompletionRequest { model: string; messages: ChatMessage[];
 export interface ChatCompletionChoice { index: number; message?: ChatMessage; delta?: Partial<ChatMessage>; finish_reason?: string | null; [key: string]: unknown }
 export interface ChatCompletionResponse { id: string; object: string; created?: number; model?: string; choices: ChatCompletionChoice[]; usage?: Record<string, number>; [key: string]: unknown }
 export type SamHeaders = Headers | Record<string, string> | Array<[string, string]>;
-export interface SamClientOptions { socketPath?: string | false; baseUrl?: string; tcpUrl?: string; nodeToken?: string; apiToken?: string; preferSocket?: boolean; timeoutMs?: number }
-export interface SamRequestOptions { method?: string; body?: unknown; serviceHeaders?: SamHeaders; headers?: SamHeaders; signal?: AbortSignal }
+export interface SamClientOptions {
+  socketPath?: string | false; baseUrl?: string; tcpUrl?: string;
+  /** A programmatically supplied node token. Do not put this value in Cordis config. */
+  nodeToken?: string; apiToken?: string;
+  /** Resolved only when a TCP request is actually attempted. */
+  resolveNodeToken?: () => Promise<string | undefined>;
+  preferSocket?: boolean; timeoutMs?: number
+}
+export interface SamRequestOptions { method?: string; body?: unknown; serviceHeaders?: SamHeaders; headers?: SamHeaders; /** Authorization for the proxied upstream service, never SAM node auth. */ upstreamAuthorization?: string; signal?: AbortSignal }
 export interface ChatRequestOptions { requiredLabels?: string | string[]; serviceHeaders?: SamHeaders; signal?: AbortSignal }
 export interface SamRawResponse { status: number; statusText: string; headers: Headers; body: AsyncIterable<Uint8Array> }

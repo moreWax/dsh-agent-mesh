@@ -2,6 +2,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import z from '@deepseek-ai/schemastery'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import type {} from '@deepseek-ai/dsh-credentials/types'
 import { CallId, LlmAdapter, LlmError, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, LlmModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SamClient } from '../core/index.js'
@@ -9,27 +11,32 @@ import { SamInferenceClient, type ChatCompletionChunk, type ChatMessage, type In
 import { SamHttpError, SamTransportError } from '../core/errors.js'
 
 export const name = 'agent-mesh-llm'
-export const inject = ['llm']
+export const inject = ['llm', 'credentials']
 export const PROVIDER = 'sam-mesh'
 
 export interface Config {
-  socketPath?: string
+  socketPath?: string | false
   tcpUrl?: string
   preferSocket?: boolean
-  apiToken?: string
+  nodeCredentialRef?: string
   route?: InferenceRoute
+  /** @deprecated use requiredLabelsAnyOf */
   requiredLabels?: string[]
+  requiredLabelsAnyOf?: string[]
   /** Cache duration for advisory model discovery. Zero refreshes every read. */
   modelsTtlMs?: number
+  timeoutMs?: number
 }
 export const Config: z<Config> = z.object({
-  socketPath: z.string().default('~/.config/sam-mesh/sam.sock'),
+  socketPath: z.union([z.string(), z.const(false)]).default('~/.config/sam-mesh/sam.sock'),
   tcpUrl: z.string().default('http://127.0.0.1:8080'),
   preferSocket: z.boolean().default(true),
-  apiToken: z.string(),
+  nodeCredentialRef: z.string(),
   route: z.object({ mode: z.union(['auto', 'pinned']), localProxyUrl: z.string() }),
   requiredLabels: z.array(z.string()),
+  requiredLabelsAnyOf: z.array(z.string()).default([]),
   modelsTtlMs: z.number().min(0).default(30_000),
+  timeoutMs: z.number().min(1).default(30_000),
 }) as unknown as z<Config>
 
 interface ToolDelta { id: string; name: string; arguments: string; index: number }
@@ -149,17 +156,18 @@ export class SamLlmAdapter extends LlmAdapter {
     yield { type: 'finish', reason: { kind: tools.size || finish === 'tool_calls' ? 'tool-calls' : finish === 'length' ? 'max-tokens' : 'stop' } }
   }
   private requestOptions(signal?: AbortSignal) {
-    return { ...(this.config.route ? { route: this.config.route } : {}), ...(this.config.requiredLabels ? { requiredLabels: this.config.requiredLabels as RequiredLabels } : {}), ...(signal ? { signal } : {}) }
+    return { ...(this.config.route ? { route: this.config.route } : {}), ...((this.config.requiredLabelsAnyOf?.length || this.config.requiredLabels?.length) ? { requiredLabels: (this.config.requiredLabelsAnyOf?.length ? this.config.requiredLabelsAnyOf : this.config.requiredLabels) as RequiredLabels } : {}), ...(signal ? { signal } : {}) }
   }
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
-  const socketPath = config.socketPath?.startsWith('~/') ? `${homedir()}/${config.socketPath.slice(2)}` : config.socketPath
+  const socketPath = typeof config.socketPath === 'string' && config.socketPath.startsWith('~/') ? `${homedir()}/${config.socketPath.slice(2)}` : config.socketPath
   const core = new SamClient({
     ...(socketPath !== undefined ? { socketPath } : {}),
     ...(config.tcpUrl !== undefined ? { tcpUrl: config.tcpUrl } : {}),
     ...(config.preferSocket !== undefined ? { preferSocket: config.preferSocket } : {}),
-    ...(config.apiToken !== undefined ? { apiToken: config.apiToken } : {}),
+    ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
+    ...(config.nodeCredentialRef !== undefined ? { resolveNodeToken: async () => (await ctx.credentials.resolve(credentialRef(config.nodeCredentialRef!)))?.value } : {}),
   })
   ctx.llm.registerAdapter([PROVIDER], new SamLlmAdapter(new SamInferenceClient(core), config))
 }

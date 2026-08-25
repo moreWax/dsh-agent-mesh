@@ -26,8 +26,8 @@ export interface SkillInstallPlan { command: CliCommandPlan; request: Readonly<S
 
 
 /** Parsed, transport-safe plugin configuration. */
-export interface AgentMeshConfig { socketPath: string | false; tcpUrl: string; preferSocket: boolean; apiToken?: string; timeoutMs: number }
-export interface AgentMeshConfigInput { socketPath?: string | false; tcpUrl?: string; preferSocket?: boolean; apiToken?: string; timeoutMs?: number }
+export interface AgentMeshConfig { socketPath: string | false; tcpUrl: string; preferSocket: boolean; nodeCredentialRef?: string; timeoutMs: number }
+export interface AgentMeshConfigInput { socketPath?: string | false; tcpUrl?: string; preferSocket?: boolean; /** Reference only; secret values belong in ctx.credentials. */ nodeCredentialRef?: string; timeoutMs?: number }
 
 export interface ServiceRegistrationResponse { id?: string; service?: MeshService; [key: string]: unknown }
 export interface SetupOptions { createConfig?: boolean; startNode?: boolean }

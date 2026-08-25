@@ -20,7 +20,8 @@ export function parseAgentMeshConfig(value: AgentMeshConfigInput | unknown = {})
   const input = value as Record<string, unknown>
   if (input.preferSocket !== undefined && typeof input.preferSocket !== "boolean") throw new TypeError("preferSocket must be boolean")
   if (input.socketPath !== undefined && input.socketPath !== false && typeof input.socketPath !== "string") throw new TypeError("socketPath must be a string or false")
-  if (input.apiToken !== undefined && (typeof input.apiToken !== "string" || !input.apiToken.trim())) throw new TypeError("apiToken must be a non-empty string")
+  if (input.nodeCredentialRef !== undefined && (typeof input.nodeCredentialRef !== "string" || !input.nodeCredentialRef.trim())) throw new TypeError("nodeCredentialRef must be a non-empty string")
+  if ("apiToken" in input || "nodeToken" in input) throw new TypeError("raw node tokens are forbidden in config; use nodeCredentialRef and ctx.credentials")
   const timeoutMs = input.timeoutMs ?? 30_000
   if (typeof timeoutMs !== "number" || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new TypeError("timeoutMs must be a positive integer")
   const tcpUrl = input.tcpUrl ?? DEFAULT_TCP
@@ -32,6 +33,6 @@ export function parseAgentMeshConfig(value: AgentMeshConfigInput | unknown = {})
   const preferSocket = (input.preferSocket as boolean | undefined) ?? true
   const configuredSocket = input.socketPath === undefined ? DEFAULT_SOCKET : input.socketPath as string | false
   const result: AgentMeshConfig = { socketPath: preferSocket ? socketPath(configuredSocket) : false, tcpUrl: url.toString().replace(/\/$/, ""), preferSocket, timeoutMs }
-  if (input.apiToken !== undefined) result.apiToken = (input.apiToken as string).trim()
+  if (input.nodeCredentialRef !== undefined) result.nodeCredentialRef = (input.nodeCredentialRef as string).trim()
   return Object.freeze(result)
 }

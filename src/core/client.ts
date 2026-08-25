@@ -38,6 +38,7 @@ export class SamClient {
   readonly baseUrl: string;
   readonly timeoutMs: number;
   readonly #nodeToken: string | undefined;
+  readonly #resolveNodeToken: (() => Promise<string | undefined>) | undefined;
   #mcpSession?: string;
   #mcpInitializing: Promise<string> | undefined;
 
@@ -46,12 +47,18 @@ export class SamClient {
     this.baseUrl = (options.baseUrl ?? options.tcpUrl ?? DEFAULT_BASE).replace(/\/$/, "");
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.#nodeToken = options.nodeToken ?? options.apiToken;
+    this.#resolveNodeToken = options.resolveNodeToken;
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) throw new SamConfigurationError("timeoutMs must be positive");
     try { new URL(this.baseUrl); } catch (cause) { throw new SamConfigurationError("baseUrl must be an absolute HTTP URL", { cause }); }
   }
 
   async requestRaw(path: string, options: SamRequestOptions = {}): Promise<SamRawResponse> {
     const headers = { ...headersRecord(options.headers), ...headersRecord(options.serviceHeaders) };
+    if (options.upstreamAuthorization !== undefined) {
+      if (Object.keys(headers).some((key) => key.toLowerCase() === "authorization"))
+        throw new SamConfigurationError("Pass upstream Authorization either as upstreamAuthorization or a header, not both");
+      headers.authorization = options.upstreamAuthorization;
+    }
     if (Object.keys(headers).some((key) => key.toLowerCase() === RESERVED_NODE_HEADER))
       throw new SamConfigurationError("X-Sam-Authentication is reserved; pass nodeToken in SamClientOptions");
     let body: Buffer | undefined;
@@ -69,7 +76,11 @@ export class SamClient {
       }
     }
     const tcpHeaders = { ...headers };
-    if (this.#nodeToken) tcpHeaders["x-sam-authentication"] = this.#nodeToken.startsWith("Bearer ") ? this.#nodeToken : `Bearer ${this.#nodeToken}`;
+    // Credential lookup is deliberately below the socket attempt: healthy local
+    // traffic neither needs nor exposes the node credential. Resolve afresh for
+    // each fallback so rotations take effect without restarting Cordis.
+    const nodeToken = this.#nodeToken ?? await this.#resolveNodeToken?.();
+    if (nodeToken) tcpHeaders["x-sam-authentication"] = nodeToken.startsWith("Bearer ") ? nodeToken : `Bearer ${nodeToken}`;
     return this.#dial(path, options.method ?? (body ? "POST" : "GET"), tcpHeaders, body, options.signal);
   }
 

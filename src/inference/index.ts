@@ -1,4 +1,8 @@
 /** OpenAI-compatible inference over a SAM node's HTTP abstraction. */
+import { MeshObservability, defaultObservability, type AuditSink } from '../observability/index.js'
+import { approveSensitivePinned, InferenceConsentError, type InferenceApproval, type InferenceConsent } from './consent.js'
+export { InferenceConsentError }
+export type { InferenceApproval, InferenceConsent, AuditSink }
 
 export interface SamHttpRequestOptions {
   method?: string
@@ -64,13 +68,17 @@ export interface ChatCompletionChunk {
 export type RequiredLabels = string | readonly string[] | Readonly<Record<string, string>>
 export type InferenceRoute =
   | { mode?: 'auto' }
-  | { mode: 'pinned'; localProxyUrl: string }
+  | { mode: 'pinned'; localProxyUrl: string; provider?: string }
 
 export interface InferenceRequestOptions {
   route?: InferenceRoute
   /** Comma-separated any-of constraints, sent as X-Sam-Required-Labels. */
   requiredLabels?: RequiredLabels
   signal?: AbortSignal
+  /** Sensitive traffic must be pinned, provider-attributed, and explicitly approved. */
+  sensitivity?: 'normal' | 'sensitive'
+  consent?: InferenceConsent
+  correlationId?: string
 }
 
 export class InferenceError extends Error {
@@ -136,12 +144,40 @@ function requestOptions(body: unknown, options: InferenceRequestOptions): SamHtt
 }
 
 /** High-level SAM OpenAI facade client. It never retries; routing/failover belongs to SAM/core. */
+export interface SamInferenceClientOptions { observability?: MeshObservability; auditSink?: AuditSink }
+
 export class SamInferenceClient {
-  constructor(private readonly transport: SamInferenceTransport) {}
+  readonly #observability: MeshObservability
+  constructor(private readonly transport: SamInferenceTransport, options: SamInferenceClientOptions = {}) {
+    this.#observability = options.observability ?? (options.auditSink ? new MeshObservability(options.auditSink) : defaultObservability)
+  }
+
+  metrics() { return this.#observability.snapshot() }
+
+  async #authorize(options: InferenceRequestOptions, model?: string): Promise<{ correlationId: string; provider?: string }> {
+    const correlationId = this.#observability.correlationId(options.correlationId)
+    const pinned = options.route?.mode === 'pinned'
+    const provider = options.route?.mode === 'pinned' ? options.route.provider : undefined
+    if (options.sensitivity === 'sensitive') {
+      if (!pinned) throw new InferenceConsentError('Sensitive inference must use a pinned route')
+      try {
+        await approveSensitivePinned({ correlationId, provider: provider ?? '', ...(model ? { model } : {}), route: 'pinned', sensitivity: 'sensitive' }, options.consent)
+        this.#observability.record('policy', { operation: 'sensitive_pinned', outcome: 'ok', ...(provider ? { provider } : {}), ...(model ? { model } : {}) })
+        await this.#observability.audit({ correlationId, action: 'inference.consent', outcome: 'ok', ...(provider ? { provider } : {}), ...(model ? { model } : {}), route: 'pinned', policy: 'sensitive-pinned-explicit-consent' })
+      } catch (error) {
+        this.#observability.record('policy', { operation: 'sensitive_pinned', outcome: 'denied', ...(provider ? { provider } : {}), ...(model ? { model } : {}) })
+        await this.#observability.audit({ correlationId, action: 'inference.consent', outcome: 'denied', ...(provider ? { provider } : {}), ...(model ? { model } : {}), route: 'pinned', policy: 'sensitive-pinned-explicit-consent', reason: error instanceof Error ? error.message : 'denied' })
+        throw error
+      }
+    }
+    return { correlationId, ...(provider ? { provider } : {}) }
+  }
 
   async models(options: InferenceRequestOptions = {}): Promise<ModelList> {
+    const attribution = await this.#authorize(options)
     const path = routePath(options.route, 'models')
     const headers: Record<string, string> = {}
+    if (options.correlationId || options.sensitivity === 'sensitive') headers['X-Correlation-Id'] = attribution.correlationId
     const label = labelsHeader(options.requiredLabels)
     if (label) headers['X-Sam-Required-Labels'] = label
     const request: SamHttpRequestOptions = { method: 'GET', headers }
@@ -162,8 +198,11 @@ export class SamInferenceClient {
   async chat(request: ChatCompletionRequest & { stream: true }, options?: InferenceRequestOptions): Promise<AsyncIterable<ChatCompletionChunk>>
   async chat(request: ChatCompletionRequest, options: InferenceRequestOptions = {}): Promise<ChatCompletionResponse | AsyncIterable<ChatCompletionChunk>> {
     if (!request.model || !Array.isArray(request.messages)) throw new InferenceProtocolError('Chat request requires model and messages')
+    const started = Date.now()
+    const attribution = await this.#authorize(options, request.model)
     const path = routePath(options.route, 'chat/completions')
     const coreOptions = requestOptions(request, options)
+    if (options.correlationId || options.sensitivity === 'sensitive') (coreOptions.headers ??= {})['X-Correlation-Id'] = attribution.correlationId
     if (request.stream === true) {
       if (!this.transport.requestStream) throw new InferenceStreamingUnsupportedError()
       let bytes: AsyncIterable<Uint8Array | string>
@@ -174,8 +213,10 @@ export class SamInferenceClient {
     try {
       const response = await this.transport.request<ChatCompletionResponse>(path, coreOptions)
       if (!response || !Array.isArray(response.choices)) throw new InferenceProtocolError('Invalid OpenAI chat completion response')
+      this.#observability.record('inference', { operation: 'chat', outcome: 'ok', ...(attribution.provider ? { provider: attribution.provider } : {}), model: request.model, ...(labelsHeader(options.requiredLabels) ? { label: labelsHeader(options.requiredLabels)! } : {}) }, Date.now() - started)
       return response
     } catch (cause) {
+      this.#observability.record('inference', { operation: 'chat', outcome: 'error', ...(attribution.provider ? { provider: attribution.provider } : {}), model: request.model }, Date.now() - started)
       if (cause instanceof InferenceError) throw cause
       throw new InferenceError('SAM chat completion failed', 'SAM_CHAT_FAILED', cause)
     }
@@ -220,3 +261,5 @@ async function* parseSse(source: AsyncIterable<Uint8Array | string>): AsyncItera
     throw new InferenceError('SAM chat stream failed', 'SAM_CHAT_STREAM_FAILED', cause)
   }
 }
+
+export { MeshObservability } from '../observability/index.js'

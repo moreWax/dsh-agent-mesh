@@ -1,0 +1,18 @@
+[Unit]
+Description=SAM node and sandbox boundary acceptance profile
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+EnvironmentFile=/etc/sam/acceptance.env
+RuntimeDirectory=sam
+# One supervision boundary makes restart behavior deterministic. Production
+# should split these into hardened units after validating socket ownership.
+ExecStart=/bin/sh -ec '$SAM_NODE run --config="$NODE_CONFIG" --control-plane="$CONTROL_PLANE" --jwt-path="$JWT_PATH" --bind-addr= --socket-path="$NODE_SOCKET" & n=$!; while [ ! -S "$NODE_SOCKET" ]; do kill -0 $n; sleep .1; done; $SAM_BOX run --socket="$AGENT_SOCKET" --sidecar-socket="$NODE_SOCKET" & b=$!; while [ ! -S "$AGENT_SOCKET" ]; do kill -0 $b; sleep .1; done; exec $NANO_INIT run --create-namespaces "$AGENT_SOCKET" $AGENT_COMMAND'
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+KillMode=control-group
+NoNewPrivileges=yes
+[Install]
+WantedBy=multi-user.target

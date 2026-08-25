@@ -12,5 +12,8 @@ describe("parseAgentMeshConfig", () => {
     expect(() => parseAgentMeshConfig({ tcpUrl: "http://user:pass@localhost" })).toThrow(/credentials/)
     expect(() => parseAgentMeshConfig({ tcpUrl: "file:///tmp/node" })).toThrow(/http or https/)
   })
-  it("trims tokens and discards unknown input", () => expect(parseAgentMeshConfig({ apiToken: " token ", unknown: true } as never)).toMatchObject({ apiToken: "token" }))
+  it("keeps only credential references and rejects raw secrets", () => {
+    expect(parseAgentMeshConfig({ nodeCredentialRef: " SAM_NODE_TOKEN ", unknown: true } as never)).toMatchObject({ nodeCredentialRef: "SAM_NODE_TOKEN" })
+    expect(() => parseAgentMeshConfig({ apiToken: "secret" } as never)).toThrow(/raw node tokens/)
+  })
 })

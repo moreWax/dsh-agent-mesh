@@ -1,0 +1,76 @@
+# Reference profile; substitute ${...} with envsubst. It assumes an existing,
+# enrolled control plane and images built from sam-research. It does not install either.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: sam-box-agent-config, namespace: "${SAM_ACCEPTANCE_NAMESPACE}"}
+data:
+  sam-node.yaml: |
+    version: "v1alpha1"
+    attenuation: {policies: [], checks: [], rules: []}
+    services: []
+  resolv.conf: |
+    nameserver 169.254.1.1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sam-box-agent, namespace: "${SAM_ACCEPTANCE_NAMESPACE}"}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sam-box-agent}}
+  template:
+    metadata: {labels: {app: sam-box-agent, sam.acceptance/role: caller}}
+    spec:
+      serviceAccountName: "${SAM_SERVICE_ACCOUNT}"
+      initContainers:
+      - name: nano-init
+        image: "${SAM_NANO_INIT_IMAGE}"
+        args: [copy, /sandbox/nano-init]
+        volumeMounts: [{name: sandbox, mountPath: /sandbox}]
+      containers:
+      - name: sam-node
+        image: "${SAM_NODE_IMAGE}"
+        args:
+        - run
+        - --config=/etc/sam/sam-node.yaml
+        - --control-plane=${SAM_CONTROL_PLANE_URL}
+        - --jwt-path=/var/run/secrets/sam/token
+        - --bind-addr=
+        - --socket-path=/run/sam/node.sock
+        volumeMounts:
+        - {name: sockets, mountPath: /run/sam}
+        - {name: config, mountPath: /etc/sam}
+        - {name: token, mountPath: /var/run/secrets/sam, readOnly: true}
+      - name: sam-box
+        image: "${SAM_BOX_IMAGE}"
+        args: [run, --socket=/run/sam/agent.sock, --sidecar-socket=/run/sam/node.sock]
+        volumeMounts: [{name: sockets, mountPath: /run/sam}]
+      - name: agent
+        image: "${SAM_AGENT_IMAGE}"
+        securityContext: {runAsUser: 65532, runAsGroup: 65532}
+        command: [/sandbox/nano-init, run, --create-namespaces, /run/sam/agent.sock, sh, -c]
+        args:
+        - |
+          while true; do
+            code=$(curl -sS -o /tmp/models -w '%{http_code}' http://mesh.sam.alt/v1/models || true)
+            echo "mesh-models=$code"
+            code=$(curl -sS -o /dev/null -w '%{http_code}' http://mesh.sam.alt/sam/service/register || true)
+            echo "node-api=$code"
+            sleep 10
+          done
+        volumeMounts:
+        - {name: sockets, mountPath: /run/sam}
+        - {name: sandbox, mountPath: /sandbox}
+        - {name: tun, mountPath: /dev/net/tun}
+        - {name: scratch, mountPath: /tmp}
+        - {name: resolv, mountPath: /etc/resolv.conf, subPath: resolv.conf}
+      volumes:
+      - {name: sockets, emptyDir: {}}
+      - {name: sandbox, emptyDir: {}}
+      - {name: scratch, emptyDir: {}}
+      - {name: resolv, configMap: {name: sam-box-agent-config}}
+      - {name: config, configMap: {name: sam-box-agent-config}}
+      - name: token
+        projected:
+          sources:
+          - serviceAccountToken: {path: token, audience: sam-control-plane-audience, expirationSeconds: 3600}
+      - {name: tun, hostPath: {path: /dev/net/tun, type: CharDevice}}

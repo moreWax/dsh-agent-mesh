@@ -28,6 +28,21 @@ describe("SamClient transport", () => {
     await new SamClient({ socketPath: "/missing/sam.sock", baseUrl: tcp.url, nodeToken: "node" }).request("/v1/models", { headers: { Authorization: "Bearer upstream" } });
     expect(headers.authorization).toBe("Bearer upstream"); expect(headers["x-sam-authentication"]).toBe("Bearer node");
   });
+  it("resolves a rotating credential lazily, only for TCP fallback", async () => {
+    let token = "first"; let resolutions = 0; const seen: Array<string | undefined> = [];
+    const unix = await server((_req, res) => json(res, { local: true }), true);
+    const tcp = await server((req, res) => { seen.push(req.headers["x-sam-authentication"] as string | undefined); json(res, { tcp: true }); });
+    const local = new SamClient({ socketPath: unix.sock, baseUrl: tcp.url, resolveNodeToken: async () => { resolutions++; return token; } });
+    await local.request("/x"); expect(resolutions).toBe(0);
+    const fallback = new SamClient({ socketPath: "/missing/sam.sock", baseUrl: tcp.url, resolveNodeToken: async () => { resolutions++; return token; } });
+    await fallback.request("/x"); token = "second"; await fallback.request("/x");
+    expect(resolutions).toBe(2); expect(seen).toEqual(["Bearer first", "Bearer second"]);
+  });
+  it("keeps explicit upstream Authorization separate from node authentication", async () => {
+    let headers: http.IncomingHttpHeaders = {}; const tcp = await server((req, res) => { headers = req.headers; json(res, {}); });
+    await new SamClient({ socketPath: false, baseUrl: tcp.url, resolveNodeToken: async () => "node" }).request("/x", { upstreamAuthorization: "Bearer service" });
+    expect(headers.authorization).toBe("Bearer service"); expect(headers["x-sam-authentication"]).toBe("Bearer node");
+  });
   it("rejects attempts to smuggle the node credential through service headers", async () => {
     await expect(new SamClient({ socketPath: false }).request("/x", { headers: { "X-Sam-Authentication": "bad" } })).rejects.toBeInstanceOf(SamConfigurationError);
   });

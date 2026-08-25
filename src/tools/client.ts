@@ -1,4 +1,5 @@
 
+import { defaultObservability, type MeshObservability } from '../observability/index.js'
 import { mcpToolUri, parseMcpToolUri, toolIdentity } from './identity.js'
 import type {
   CallToolOptions, CallToolResult, Completeness, DescribeToolOptions, DiscoveryFailure,
@@ -21,7 +22,7 @@ export class ToolProtocolError extends ToolClientError { readonly code = 'PROTOC
 export class ToolNotFoundError extends ToolClientError { readonly code = 'TOOL_NOT_FOUND' }
 
 interface CachedSchema { value: ToolDescription; expiresAt: number }
-export interface ToolClientOptions { schemaTtlMs?: number; now?: () => number }
+export interface ToolClientOptions { schemaTtlMs?: number; now?: () => number; observability?: MeshObservability }
 
 type WireTool = {
   peer_id?: unknown; tool_name?: unknown; description?: unknown;
@@ -32,9 +33,11 @@ export class ToolClient {
   readonly #cache = new Map<string, CachedSchema>()
   readonly #ttl: number
   readonly #now: () => number
+  readonly #observability: MeshObservability
   constructor(readonly core: ToolClientCore, options: ToolClientOptions = {}) {
     this.#ttl = options.schemaTtlMs ?? 300_000
     this.#now = options.now ?? Date.now
+    this.#observability = options.observability ?? defaultObservability
   }
 
   async discover(options: DiscoverToolsOptions = {}, signal?: AbortSignal): Promise<ToolSearchResult> {
@@ -46,7 +49,9 @@ export class ToolClient {
     let wire: unknown
     try { wire = await this.core.findRemoteTools(request, signal) }
     catch (error) { throw mapToolError(error) }
-    return normalizeSearch(wire)
+    const result = normalizeSearch(wire)
+    this.#observability.record('discovery', { operation: 'tools', outcome: result.complete ? 'ok' : result.partial ? 'partial' : 'error', completeness: result.complete ? 'complete' : result.partial ? 'partial' : 'failed' })
+    return result
   }
 
   find(options: DiscoverToolsOptions = {}, signal?: AbortSignal): Promise<ToolSearchResult> { return this.discover(options, signal) }

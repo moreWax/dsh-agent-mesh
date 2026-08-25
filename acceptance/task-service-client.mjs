@@ -1,0 +1,4 @@
+import { readFile } from 'node:fs/promises'
+import { TaskClient } from '../lib/tasks/index.js'
+const address=JSON.parse(await readFile(process.env.ADDRESS_FILE,'utf8'));class Caller{async callTool(name,args){const reply=await fetch(address.mcpUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})}).then(r=>r.json());return reply.result}}
+const client=new TaskClient(new Caller());const submitted=await client.submit({idempotencyKey:`smoke-${process.pid}`,input:{from:'second-process'}});const result=await client.collect({taskId:submitted.task.taskId,waitMs:5000});if(result.status!=='succeeded'||result.output?.from!=='second-process')throw Error(JSON.stringify(result));console.log(JSON.stringify({ok:true,taskId:result.taskId,server:address.mcpUrl}))

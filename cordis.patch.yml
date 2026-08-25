@@ -7,6 +7,7 @@
         socketPath: ~/.config/sam-mesh/sam.sock
         tcpUrl: http://127.0.0.1:8080
         preferSocket: true
+        nodeCredentialRef: SAM_NODE_AUTH
 
 - insert:
     - id: agent-mesh-llm
@@ -15,8 +16,12 @@
         socketPath: ~/.config/sam-mesh/sam.sock
         tcpUrl: http://127.0.0.1:8080
         preferSocket: true
+        nodeCredentialRef: SAM_NODE_AUTH
         route:
           mode: auto
+        requiredLabelsAnyOf: []
+        modelsTtlMs: 30000
+        timeoutMs: 30000
 
 - insert:
     - id: agent-mesh-tools
@@ -25,3 +30,15 @@
         requiredLabelsAnyOf: []
         refreshIntervalMs: 60000
         failOnStartupError: false
+
+# Optional deployable durable task MCP endpoint.
+- insert:
+    - id: agent-mesh-task-service
+      name: '@morewax/dsh-agent-mesh/tasks/service'
+      config:
+        host: 127.0.0.1
+        port: 0
+        path: /mcp
+        healthPath: /healthz
+        serviceName: dsh-task-service
+        registerWithSam: true

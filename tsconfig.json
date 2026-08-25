@@ -4,7 +4,9 @@
     "module": "NodeNext",
     "moduleResolution": "nodenext",
     "lib": [
-      "es2024"
+      "es2024",
+      "dom",
+      "dom.iterable"
     ],
     "types": [
       "node"
@@ -17,7 +19,8 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
     "allowJs": true,
-    "checkJs": false
+    "checkJs": false,
+    "jsx": "react-jsx"
   },
   "include": [
     "src",
