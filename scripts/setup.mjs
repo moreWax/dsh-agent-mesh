@@ -108,6 +108,7 @@ const manual = (harness) => {
     say('  corepack enable && pnpm install && pnpm build && cd ..')   // pnpm build = the repo's own orchestrator (libs BEFORE the web app; pnpm -r build races cyclic workspace deps)
   }
   say('  pnpm install && pnpm fetch:binaries && pnpm -r build')
+  if (harness?.kind === 'checkout') say(`  cd ${harness.dir}   # tsx resolves from the harness's node_modules — run the next command from here`)
   say(`  ${[...cliPrefix(harness), 'plugin', '--profile', 'web', 'add', `link:${join(ROOT, 'packages', 'dsh-agent-mesh')}`].join(' ')}`)
 }
 
@@ -159,7 +160,10 @@ async function main() {
     // 5. register the plugin
     if (harness && await ask(rl, 'Register the plugin with the dsh web profile now?')) {
       const [cmd, ...args] = [...cliPrefix(harness), 'plugin', '--profile', 'web', 'add', `link:${join(ROOT, 'packages', 'dsh-agent-mesh')}`]
-      run(cmd, args, ROOT)
+      // cwd MUST be the harness checkout: --import tsx/esm resolves tsx from
+      // the current directory's node_modules, and tsx is the harness's
+      // devDependency, not ours. (The link path stays absolute.)
+      run(cmd, args, harness.kind === 'checkout' ? harness.dir : ROOT)
       say()
       say('Done. Start the Web UI and open Settings → Agent Mesh:')
       if (harness.kind === 'bin') {
