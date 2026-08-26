@@ -6,6 +6,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "fetch:binaries": "node scripts/fetch-sam-binaries.mjs"
+    "fetch:binaries": "node scripts/fetch-sam-binaries.mjs",
+    "setup": "node scripts/setup.mjs"
   }
 }

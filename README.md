@@ -124,48 +124,29 @@ binary` prints the same list in a terminal, ★ = suggested.
 
 ## Install from source (until npm publish lands)
 
-**Prerequisite — dsh itself** (the plugin runs inside the harness, which is
-also source-installed today). Skip this block if you already have it:
-
-```bash
-git clone https://github.com/deepseek-ai/deepseek-harness
-cd deepseek-harness
-corepack enable
-pnpm install
-pnpm -r build
-cd ..
-```
-
-**Then this workspace.** The first line clones, or pulls if you already have
-a checkout — safe to paste on any machine, fresh or returning:
-
 ```bash
 git clone https://github.com/moreWax/dsh-agent-mesh 2>/dev/null || git -C dsh-agent-mesh pull
 cd dsh-agent-mesh
-pnpm install
-pnpm fetch:binaries
-pnpm -r build
-node --import tsx/esm ../deepseek-harness/apps/cli/src/bin.ts plugin --profile web add link:$(pwd)/packages/dsh-agent-mesh
+corepack enable
+pnpm setup
 ```
 
-What each step does:
+`pnpm setup` walks the whole flow interactively, asking before **every**
+network action — nothing downloads silently:
 
-- `pnpm fetch:binaries` vendors the official sam-node release binaries
-  (checksum-verified, ~13MB for your platform). **Optional** — skip it and
-  the node manager falls back to a `sam-node` already on your PATH;
-  `sam-mesh node binary` shows every candidate and the suggestion either way.
-- `pnpm -r build` compiles sam-mesh first (topological), then the plugin.
-- The last line registers the plugin with your dsh `web` profile. Adjust the
-  path if your deepseek-harness checkout lives elsewhere.
+1. **DeepSeek Harness** — the plugin runs inside dsh, so it is required. If
+   no checkout is found (sibling directory, `~/deepseek-harness`, or
+   `$DSH_CHECKOUT`), setup **asks** whether to download and build it for you.
+2. **Workspace install** (`pnpm install`) and **build** (`pnpm -r build`).
+3. **Vendored sam-node binaries** — offered, not forced (~13MB for your
+   platform, official release, checksum-verified). Skip and the node manager
+   falls back to a `sam-node` already on your PATH.
+4. **Plugin registration** — offered last: links the plugin into your dsh
+   `web` profile and prints the command to start the Web UI.
 
-Then start the Web UI from your deepseek-harness checkout and open
-**Settings → Agent Mesh**:
-
-```bash
-node --import tsx/esm apps/cli/src/bin.ts --profile web --port 3080
-```
-
-Enroll, discover fleets, join, approve — all in the card; no further
+In a non-interactive shell (CI, scripts) setup prints the manual steps and
+touches nothing. Then open **Settings → Agent Mesh** in the Web UI —
+enroll, discover fleets, join, approve: all in the card, no further
 downloads, no terminal.
 
 ## Development
