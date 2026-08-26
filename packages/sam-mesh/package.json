@@ -6,21 +6,21 @@
   "license": "MIT",
   "exports": {
     ".": {
-      "types": "./lib/core/index.d.ts",
-      "default": "./lib/core/index.js"
+      "types": "./lib/core/index.d.mts",
+      "default": "./lib/core/index.mjs"
     },
     "./core": {
-      "types": "./lib/core/index.d.ts",
-      "default": "./lib/core/index.js"
+      "types": "./lib/core/index.d.mts",
+      "default": "./lib/core/index.mjs"
     },
     "./node": {
-      "types": "./lib/node/index.d.ts",
-      "default": "./lib/node/index.js"
+      "types": "./lib/node/index.d.mts",
+      "default": "./lib/node/index.mjs"
     },
     "./package.json": "./package.json"
   },
   "bin": {
-    "sam-mesh": "./lib/cli/index.js"
+    "sam-mesh": "./lib/cli/index.mjs"
   },
   "files": [
     "lib",
