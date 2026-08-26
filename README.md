@@ -42,12 +42,29 @@ plugin (`dsh plugin --profile web add @morewax/dsh-agent-mesh`), open
 Settings → Agent Mesh, and use the **Mesh node** section — enrollment shows
 the verification URL and code right in the card.
 
+## Install from source (until npm publish lands)
+
+```bash
+git clone https://github.com/moreWax/dsh-agent-mesh && cd dsh-agent-mesh
+pnpm install
+pnpm fetch:binaries   # vendored sam-node: official release, checksum-verified (~13MB/platform)
+pnpm -r build         # sam-mesh first (topological), then the plugin
+dsh plugin --profile web add link:$(pwd)/packages/dsh-agent-mesh
+```
+
+Skip `fetch:binaries` and everything still works — the node manager simply
+falls back to a `sam-node` already on your PATH (`sam-mesh node binary`
+shows every candidate and the suggestion). Everything after the install —
+enroll, discover fleets, join, approve — happens in **Settings → Agent
+Mesh**; no further downloads, no terminal.
+
 ## Development
 
 ```bash
 pnpm install
-pnpm -r build        # sam-mesh first (topological), then the plugin
-pnpm -r test         # 70 tests across both packages
+pnpm fetch:binaries  # only needed for the bundled-binary paths (pack/publish)
+pnpm -r build
+pnpm -r test         # 150 tests across the workspace
 pnpm -r typecheck
 ```
 
