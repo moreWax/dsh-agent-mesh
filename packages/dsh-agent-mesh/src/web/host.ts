@@ -132,6 +132,41 @@ export class AgentMeshWebHost extends TypertRemoteService {
     return { checks }
   }
 
+  /** Pending fleet pair requests — the card's approval queue. Ungated read,
+   * same sensitivity class as nodeStatus; the web surface is dsh-authenticated. */
+  @Remote("pairRequests") async pairRequests(): Promise<{ pairing: boolean; pending: unknown[] }> {
+    const tasks = this.taskService()
+    if (!tasks?.pairing) return { pairing: false, pending: [] }
+    return { pairing: true, pending: tasks.pairPending() }
+  }
+
+  /** Operator approval: seals the fleet invite to the requester. Gated —
+   * this is the human gate of the whole pairing protocol. */
+  @Remote("approvePairRequest") async approvePairRequest(requestId: string, approval: ApprovedAction): Promise<ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const tasks = this.taskService()
+    if (!tasks?.pairing) return { ok: false, error: "Pairing is not armed on this machine (no capability gate configured)" }
+    try {
+      const approved = tasks.pairApprove(requestId, approval.approvedBy.trim())
+      return { ok: true, message: `Approved '${approved.label}' — invite sealed and delivered` }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  /** Reject a pending request. Gated like approval — it mutates the queue. */
+  @Remote("rejectPairRequest") async rejectPairRequest(requestId: string, approval: ApprovedAction): Promise<ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const tasks = this.taskService()
+    if (!tasks?.pairing) return { ok: false, error: "Pairing is not armed on this machine (no capability gate configured)" }
+    return tasks.pairReject(requestId)
+      ? { ok: true, message: "Request rejected" }
+      : { ok: false, error: "No such pending request (expired or already handled)" }
+  }
+
+  /** Lazy access: the task-service plugin may be unmounted or still booting. */
+  private taskService(): import("../tasks/service.js").TaskService | undefined {
+    try { return this.ctx.agentMeshTaskService } catch { return undefined }
+  }
+
   @Remote("installSkill") async installSkill(request: SkillInstallRequest, approval: ApprovedAction): Promise<ActionResult> {
     if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
     const plan = this.mesh.operator.planSkillInstall(request)

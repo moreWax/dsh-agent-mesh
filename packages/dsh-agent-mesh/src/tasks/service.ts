@@ -142,6 +142,9 @@ export class TaskService {
   private readonly idleWaiters = new Set<() => void>()
 
   readonly tools = new ToolRegistry()
+  /** Attached by withPairing; undefined when pairing is not mounted. */
+  pairing: import('./pairing.js').PairingStore | undefined
+  pairInviteFor: (() => string) | undefined
 
   constructor(readonly store: TaskStore, readonly executor: TaskExecutor, options: TaskServiceOptions = {}) {
     this.concurrency = options.concurrency ?? 4
@@ -247,6 +250,20 @@ export class TaskService {
     if (!tool) throw protocol('TASK_TOOL_NOT_FOUND', `Unknown task tool: ${name}`)
     return tool.handler(arguments_, { signal: options?.signal })
   }
+
+  private requirePairing(): import('./pairing.js').PairingStore {
+    if (!this.pairing || !this.pairInviteFor) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings')
+    return this.pairing
+  }
+
+  /** Operator surfaces (web card, in-process callers) — same store the mesh tools use. */
+  pairPending(): import('./pairing.js').PairRequest[] { return this.requirePairing().pending() }
+  pairApprove(requestId: string, approvedBy: string): { requestId: string; label: string } {
+    const approved = this.requirePairing().approve(requestId, this.pairInviteFor!(), approvedBy)
+    if (!approved) throw protocol('TASK_PAIRING_UNKNOWN', 'No pending request with that id (expired, approved, or unknown)')
+    return { requestId: approved.requestId, label: approved.label }
+  }
+  pairReject(requestId: string): boolean { return this.requirePairing().reject(requestId) }
 
   private enqueue(taskId: string): void { if (this.pendingSet.has(taskId)) return; this.pendingSet.add(taskId); this.pending.push(taskId); this.pump() }
   private pump(): void { while (this.active < this.concurrency) { const id = this.pending.shift(); if (!id) return; this.pendingSet.delete(id); this.active++; void this.execute(id).finally(() => { this.active--; if (this.active === 0) { for (const resolve of this.idleWaiters) resolve(); this.idleWaiters.clear() } this.pump() }) } }

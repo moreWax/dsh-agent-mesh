@@ -17,7 +17,13 @@ sam-mesh fleet join --fleet morewax-dsh-task-service          # pairing request 
 
 (`fleet discover` browses fleets if you don't know the name.)
 
-## Operator (any fleet machine)
+## Operator — approve from the dsh Web UI (or CLI)
+
+The mesh card (Settings → agent-mesh) has a **Fleet pairing** section:
+pending requests with labels and ages, **Approve**/**Reject** buttons.
+Approval seals the invite to the requester and delivers it instantly.
+
+Terminal equivalent on any fleet machine:
 
 ```bash
 sam-mesh fleet approvals                       # pending requests, with labels

@@ -88,7 +88,11 @@ export class PairingStore {
 
 // ─── pairing as a mountable module ──────────────────────────────────────────
 
-interface PairingCapable { tools: { register(tool: ToolDescriptor): unknown } }
+interface PairingCapable {
+  tools: { register(tool: ToolDescriptor): unknown }
+  pairing?: PairingStore | undefined
+  pairInviteFor?: (() => string) | undefined
+}
 
 /** Protocol errors keep the exact pre-module codes/messages (pinned by tests). */
 function pairError(code: string, message: string, retryable: boolean): TaskProtocolError {
@@ -136,5 +140,9 @@ export function pairingTools(store: PairingStore, inviteFor: () => string): Tool
 export function withPairing<T extends PairingCapable>(service: T, options: { store?: PairingStore; inviteFor: () => string }): T {
   const store = options.store ?? new PairingStore()
   for (const tool of pairingTools(store, options.inviteFor)) service.tools.register(tool)
+  // Attach so in-process operator surfaces (the web card) share the exact
+  // store + invite the mesh tools use — one source, never two.
+  service.pairing = store
+  service.pairInviteFor = options.inviteFor
   return service
 }
