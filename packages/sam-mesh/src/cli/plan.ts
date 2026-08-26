@@ -262,6 +262,7 @@ export function fleetProfilePatch(invite: FleetInvite): string {
     nodeCredentialRef: SAM_NODE_AUTH
     nodeControlPlane: ${invite.controlPlane}
     nodeAnnouncePrivate: ${invite.announcePrivate}
+    callCapabilityRef: MESH_TASK_CAPABILITY
 - id: agent-mesh-task-service
   config:
     host: 127.0.0.1
