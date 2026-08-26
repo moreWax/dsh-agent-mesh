@@ -1,3 +1,0 @@
-feat: pnpm setup — interactive from-source installer that OFFERS the harness download
-
-The user asked: on a machine without dsh, the flow should prompt whether to download it. scripts/setup.mjs detects a harness checkout (sibling, ~, $DSH_CHECKOUT); missing → explicit y/N offer to clone+build deepseek-harness, then workspace install/build, offered binary vendoring, offered plugin registration, and the Web UI start command. Consent doctrine preserved: every network action is a separate prompt; non-TTY prints the manual steps and downloads nothing. Verified: harness-detected path (escha sibling), no-harness path (relocated script, clean HOME), non-TTY path (exit 0, zero side effects). README from-source section now leads with pnpm setup.
