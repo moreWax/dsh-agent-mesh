@@ -23,6 +23,8 @@ export interface Config {
   /** @deprecated use requiredLabelsAnyOf */
   requiredLabels?: string[]
   requiredLabelsAnyOf?: string[]
+  /** Credential ref (managed store) resolved PER CALL and sent as the x-fleet-capability header on execution. */
+  capabilityCredentialRef?: string
   /** Cache duration for advisory model discovery. Zero refreshes every read. */
   modelsTtlMs?: number
   timeoutMs?: number
@@ -35,6 +37,9 @@ export const Config: z<Config> = z.object({
   route: z.object({ mode: z.union(['auto', 'pinned']), localProxyUrl: z.string() }),
   requiredLabels: z.array(z.string()),
   requiredLabelsAnyOf: z.array(z.string()).default([]),
+  /** Managed-store credential injected as the fleet-capability gate header on EXECUTION calls
+   *  (chat/completions). Model LISTING stays open — listing is the phone book, execution is gated. */
+  capabilityCredentialRef: z.string().default(''),
   modelsTtlMs: z.number().min(0).default(30_000),
   timeoutMs: z.number().min(1).default(30_000),
 }) as unknown as z<Config>
@@ -96,7 +101,7 @@ function usage(chunk: ChatCompletionChunk): StreamChunk | undefined {
 /** A single-attempt adapter: retries and peer failover remain owned by dsh and SAM respectively. */
 export class SamLlmAdapter extends LlmAdapter {
   private modelsCache: { at: number; models: readonly LlmModelInfo[] } | undefined
-  constructor(private readonly inference: SamInferenceClient, private readonly config: Config = {}) { super() }
+  constructor(private readonly inference: SamInferenceClient, private readonly config: Config = {}, private readonly resolveCapability?: () => Promise<string | undefined>) { super() }
   override providerInfo(provider: string) { return { id: provider, name: 'SAM Mesh' } }
   override providerRetryPolicy() { return resolveRetryPolicy({ mode: 'normal', maxRetries: 0 }, 'agent-mesh-llm.retryPolicy') }
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
@@ -120,7 +125,12 @@ export class SamLlmAdapter extends LlmAdapter {
       stream_options: { include_usage: true },
     }
     let source: AsyncIterable<ChatCompletionChunk>
-    try { source = await this.inference.chat(request as any, this.requestOptions(options.signal)) as unknown as AsyncIterable<ChatCompletionChunk> }
+    const chatOptions = this.requestOptions(options.signal)
+    if (this.resolveCapability) {
+      const capability = await this.resolveCapability()
+      if (capability) chatOptions.serviceHeaders = { 'x-fleet-capability': capability }
+    }
+    try { source = await this.inference.chat(request as any, chatOptions) as unknown as AsyncIterable<ChatCompletionChunk> }
     catch (error) { throw failure(error) }
     let text = '', reasoning = ''; let textOpen = false, reasoningOpen = false
     const tools = new Map<number, ToolDelta>(); let finish = 'stop'
@@ -155,7 +165,7 @@ export class SamLlmAdapter extends LlmAdapter {
     for (const tool of tools.values()) yield { type: 'block-end', index: tool.index, block: { type: 'tool-call', id: CallId(tool.id), name: tool.name, arguments: tool.arguments } }
     yield { type: 'finish', reason: { kind: tools.size || finish === 'tool_calls' ? 'tool-calls' : finish === 'length' ? 'max-tokens' : 'stop' } }
   }
-  private requestOptions(signal?: AbortSignal) {
+  private requestOptions(signal?: AbortSignal): { route?: InferenceRoute; requiredLabels?: RequiredLabels; signal?: AbortSignal; serviceHeaders?: Record<string, string> } {
     return { ...(this.config.route ? { route: this.config.route } : {}), ...((this.config.requiredLabelsAnyOf?.length || this.config.requiredLabels?.length) ? { requiredLabels: (this.config.requiredLabelsAnyOf?.length ? this.config.requiredLabelsAnyOf : this.config.requiredLabels) as RequiredLabels } : {}), ...(signal ? { signal } : {}) }
   }
 }
@@ -169,5 +179,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
     ...(config.nodeCredentialRef !== undefined ? { resolveNodeToken: async () => (await ctx.credentials.resolve(credentialRef(config.nodeCredentialRef!)))?.value } : {}),
   })
-  ctx.llm.registerAdapter([PROVIDER], new SamLlmAdapter(new SamInferenceClient(core), config))
+  const ref = config.capabilityCredentialRef
+  const resolveCapability = ref ? async () => (await ctx.credentials.resolve(credentialRef(ref)))?.value : undefined
+  ctx.llm.registerAdapter([PROVIDER], new SamLlmAdapter(new SamInferenceClient(core), config, resolveCapability))
 }

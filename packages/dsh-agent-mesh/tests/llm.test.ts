@@ -30,3 +30,30 @@ describe('SamLlmAdapter', () => {
     expect(adapter.providerRetryPolicy()).toMatchObject({ mode:'normal', maxRetries:0 })
   })
 })
+
+describe('fleet capability injection', () => {
+  it('sends x-fleet-capability on execution when a resolver is configured', async () => {
+    const api = inference([])
+    const adapter = new SamLlmAdapter(api as any, {}, async () => 'fleet-cap')
+    await collect(adapter.stream({ provider: 'sam-mesh', model: 'm', messages: [] }))
+    expect((api.chat.mock.calls[0] as any[])[1].serviceHeaders).toEqual({ 'x-fleet-capability': 'fleet-cap' })
+  })
+  it('omits the header when the store has no credential, and never sends it on model listing', async () => {
+    const api = inference([])
+    const adapter = new SamLlmAdapter(api as any, {}, async () => undefined)
+    await collect(adapter.stream({ provider: 'sam-mesh', model: 'm', messages: [] }))
+    expect((api.chat.mock.calls[0] as any[])[1].serviceHeaders).toBeUndefined()
+    await adapter.listModels('sam-mesh')
+    expect((api.models.mock.calls[0] as any[])[0].serviceHeaders).toBeUndefined()
+  })
+  it('resolves per call (rotation-safe)', async () => {
+    const api = inference([])
+    let value = 'cap-a'
+    const adapter = new SamLlmAdapter(api as any, {}, async () => value)
+    await collect(adapter.stream({ provider: 'sam-mesh', model: 'm', messages: [] }))
+    value = 'cap-b'
+    await collect(adapter.stream({ provider: 'sam-mesh', model: 'm', messages: [] }))
+    expect((api.chat.mock.calls[0] as any[])[1].serviceHeaders['x-fleet-capability']).toBe('cap-a')
+    expect((api.chat.mock.calls[1] as any[])[1].serviceHeaders['x-fleet-capability']).toBe('cap-b')
+  })
+})

@@ -75,6 +75,8 @@ export interface InferenceRequestOptions {
   /** Comma-separated any-of constraints, sent as X-Sam-Required-Labels. */
   requiredLabels?: RequiredLabels
   signal?: AbortSignal
+  /** Extra headers forwarded to the serving backend (e.g. a fleet capability gate token). */
+  serviceHeaders?: Record<string, string>
   /** Sensitive traffic must be pinned, provider-attributed, and explicitly approved. */
   sensitivity?: 'normal' | 'sensitive'
   consent?: InferenceConsent
@@ -139,6 +141,7 @@ function requestOptions(body: unknown, options: InferenceRequestOptions): SamHtt
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (label) headers['X-Sam-Required-Labels'] = label
   const out: SamHttpRequestOptions = { method: 'POST', body, headers }
+  if (options.serviceHeaders) out.serviceHeaders = { ...options.serviceHeaders }
   if (options.signal) out.signal = options.signal
   return out
 }

@@ -263,6 +263,18 @@ export function fleetProfilePatch(invite: FleetInvite): string {
     nodeControlPlane: ${invite.controlPlane}
     nodeAnnouncePrivate: ${invite.announcePrivate}
     callCapabilityRef: MESH_TASK_CAPABILITY
+- id: agent-mesh-llm
+  config:
+    socketPath: ~/.config/sam-mesh/sam.sock
+    tcpUrl: http://127.0.0.1:8080
+    preferSocket: true
+    nodeCredentialRef: SAM_NODE_AUTH
+    route:
+      mode: auto
+    requiredLabelsAnyOf: []
+    capabilityCredentialRef: MESH_TASK_CAPABILITY
+    modelsTtlMs: 30000
+    timeoutMs: 30000
 - id: agent-mesh-task-service
   config:
     host: 127.0.0.1

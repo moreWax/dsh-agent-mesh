@@ -27,6 +27,46 @@ import { INSTALL_INSTRUCTION, QR_MISSING_HINT, SAM_INSTALL_CMD, buildChecks, exp
 import { AGENT_SKILL } from './skill-doc.js'
 import { runFleet } from './fleet.js'
 
+async function runInferenceProxy(args: string[]): Promise<void> {
+  const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
+  const target = flag('--target')
+  if (!target) { stderr.write('Usage: sam-mesh inference-proxy --target <url> [--host 127.0.0.1] [--port 4100] [--announce-name <name>] [--allow-ungated]\n'); exit(2) }
+  const host = flag('--host') ?? '127.0.0.1'
+  const port = Number(flag('--port') ?? '4100')
+  if (!Number.isInteger(port) || port < 1 || port > 65535) { stderr.write('--port must be an integer 1..65535\n'); exit(2) }
+  const capability = process.env.SAM_INFERENCE_CAPABILITY ?? ''
+  const allowUngated = args.includes('--allow-ungated')
+  if (!capability && !allowUngated) {
+    stderr.write('Refusing to serve UNGATED inference on the mesh: set SAM_INFERENCE_CAPABILITY (the fleet capability) or pass --allow-ungated explicitly.\n')
+    exit(2)
+  }
+  if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
+    stderr.write(`Refusing to bind ${host}: the gate proxy must stay loopback-only; the mesh is the only inbound path.\n`)
+    exit(2)
+  }
+  const { createInferenceProxyServer, startAnnounceLoop } = await import('../node/inference-proxy.js')
+  const log = (line: string) => stderr.write(`[inference-proxy] ${line}\n`)
+  const server = createInferenceProxyServer({
+    host, port, target,
+    ...(process.env.SAM_INFERENCE_UPSTREAM_AUTH ? { upstreamAuth: process.env.SAM_INFERENCE_UPSTREAM_AUTH } : {}),
+    requiredCapability: capability,
+    onLog: log,
+  })
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve()) })
+  log(`gated proxy on http://${host}:${port} -> ${target} (${capability ? 'capability gate ON' : 'GATE OFF — allowed explicitly'})`)
+  let stopAnnounce: (() => void) | undefined
+  const announceName = flag('--announce-name')
+  if (announceName) {
+    const { SamClient } = await import('../core/index.js')
+    const sam = new SamClient()
+    stopAnnounce = startAnnounceLoop({ request: (path, opts) => sam.request(path, opts), name: announceName, targetUrl: `http://${host}:${port}`, onLog: log })
+    log(`announcing as ${announceName} (re-announces every 30s; survives node restarts)`)
+  }
+  const shutdown = (): void => { stopAnnounce?.(); server.close(() => exit(0)); setTimeout(() => exit(0), 2000).unref() }
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
+}
+
 const CLIENT_COMMANDS = new Set(['status', 'peers', 'services', 'tools', 'models', 'call', 'tail'])
 
 function manager(): SamNodeManager {
@@ -175,6 +215,13 @@ Node kit:
   node status                 installed / enrolled / running
   node start | node stop      daemon lifecycle (idempotent)
   node join [--control-plane] device-flow enrollment; prints URL + code
+
+Serve inference on the mesh:
+  inference-proxy --target <url> [--port 4100] [--announce-name <n>]
+                          loopback gate proxy: models listing open, execution
+                          requires the fleet capability (env SAM_INFERENCE_CAPABILITY,
+                          upstream bearer env SAM_INFERENCE_UPSTREAM_AUTH).
+                          Refuses to run ungated without --allow-ungated.
 `)
   exit(0)
 }
@@ -250,5 +297,6 @@ else if (command === 'doctor') {
 else if (command === 'fleet') await runFleet(rest)
 else if (command === 'skill') stdout.write(AGENT_SKILL + '\n')
 else if (command === 'node') await runNode(rest)
+else if (command === 'inference-proxy') await runInferenceProxy(rest)
 else if (CLIENT_COMMANDS.has(command)) await runClient([command, ...rest])
 else { stderr.write(`Unknown command: ${command}\n`); exit(2) }
