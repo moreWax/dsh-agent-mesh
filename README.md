@@ -100,6 +100,58 @@ card's *sam-node binary* dropdown lists every usable binary on the machine
 with the suggestion preselected (`Auto — bundled v…`); `sam-mesh node
 binary` prints the same list in a terminal, ★ = suggested.
 
+## Mesh inference — serve your GPU models, pick them in dsh on any fleet machine
+
+Any machine can serve an OpenAI-compatible backend (vLLM, LiteLLM, Ollama, …)
+on the mesh behind the same capability gate as tasks. The **sam-mesh
+inference-proxy** sits on loopback between the node's announced service and
+the backend: model **listing is open** (the phone book), **execution is
+gated** — every other path requires the fleet capability in the
+`x-fleet-capability` header (timing-safe, uniform 403, the backend is never
+touched). The capability header and any inbound `Authorization` are stripped;
+the upstream credential is injected instead and never crosses the mesh.
+
+Serve side (the machine with the models):
+
+```bash
+export SAM_INFERENCE_UPSTREAM_AUTH=change-me-upstream-key
+export SAM_INFERENCE_CAPABILITY=change-me-fleet-capability
+node packages/sam-mesh/lib/cli/index.mjs inference-proxy \
+  --target http://127.0.0.1:4001 --port 4100 --announce-name morewax-gpu-inference
+```
+
+The proxy refuses to run ungated without an explicit `--allow-ungated` and
+refuses non-loopback binds — the mesh is the only inbound path.
+`--announce-name` registers the service on the local node and re-announces
+every 30s, so node restarts self-heal. Run it under your service manager for
+a permanent serve side.
+
+Consume side (any fleet machine running dsh): the `agent-mesh-llm` row
+projects mesh models into dsh's model picker under the **sam-mesh** provider.
+Fleet members that joined after 2026-08-26 get the capability wiring from the
+pairing patch automatically; existing members add the ref to the profile
+patch (`~/.dsh/profiles/web/cordis.patch.yml`) — remember the patch REPLACES
+row config, so restate every key:
+
+```yaml
+- id: agent-mesh-llm
+  config:
+    socketPath: ~/.config/sam-mesh/sam.sock
+    tcpUrl: http://127.0.0.1:8080
+    preferSocket: true
+    nodeCredentialRef: SAM_NODE_AUTH
+    route:
+      mode: auto
+    requiredLabelsAnyOf: []
+    capabilityCredentialRef: MESH_TASK_CAPABILITY
+    modelsTtlMs: 30000
+    timeoutMs: 30000
+```
+
+Restart dsh, pick a mesh model in the model selector, chat. The request
+travels the mesh end-to-end encrypted; the serving machine's gate checks the
+capability and runs the completion on its own hardware.
+
 ## CLI
 
 `sam-mesh` (or `npx @morewax/sam-mesh`) — action-routed, agent-friendly:
