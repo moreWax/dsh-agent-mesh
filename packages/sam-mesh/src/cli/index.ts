@@ -6,6 +6,7 @@
  *
  *   sam-mesh status|services|tools|models|call ...   mesh client (see below)
  *   sam-mesh node status                             installed/enrolled/running
+ *   sam-mesh node binary                             every usable sam-node; ★ = suggested
  *   sam-mesh node start                              start the node daemon (idempotent)
  *   sam-mesh node stop                               stop the node daemon (idempotent)
  *   sam-mesh node join [--control-plane <url>]       device-flow enrollment; prints URL + code
@@ -68,6 +69,17 @@ async function runNode(args: string[]): Promise<void> {
   switch (sub) {
     case 'status': {
       print(await nodes.status())
+      return
+    }
+    case 'binary': {
+      // Every usable sam-node on this machine; ★ marks the kit's suggestion
+      // (bundled — version-pinned to the kit and integrity-checked). Pin a
+      // different one with SAM_NODE=<path>.
+      const options = await nodes.binaryOptions()
+      if (options.length === 0) { stderr.write(`No sam-node found anywhere — install one with: sam-mesh node install\n`); exit(1) }
+      for (const o of options) {
+        stdout.write(`${o.suggested ? '★' : ' '} ${o.path}  [${o.source}${o.tag ? ` ${o.tag}` : ''}]${o.suggested ? ' — suggested' : ''}\n`)
+      }
       return
     }
     case 'install': {

@@ -20,6 +20,12 @@ export interface AgentMeshSettings {
   stopNodeOnExit: boolean
   /** '' means the manager default (https://hub.sam-mesh.dev). */
   nodeControlPlane: string
+  /**
+   * sam-node binary selection: '' = auto (the manager's suggestion — the
+   * bundled binary when present, else PATH). Any other value is an explicit
+   * absolute path from the card's dropdown (binaryOptions enumeration).
+   */
+  nodeBinary: string
   /** Managed-store REFERENCE for the pre-shared enrollment token; '' = interactive device flow. */
   nodeEnrollmentCredentialRef: string
   tcpUrl: string
@@ -33,6 +39,7 @@ export const AgentMeshSettingsSchema = z.object({
   autoBeginEnrollment: z.boolean().default(true),
   stopNodeOnExit: z.boolean().default(true),
   nodeControlPlane: z.string().default(''),
+  nodeBinary: z.string().default(''),
   tcpUrl: z.string().default('http://127.0.0.1:8080'),
   timeoutMs: z.natural().default(30_000),
   preferSocket: z.boolean().default(true),
@@ -46,6 +53,7 @@ export function settingsBaseFromConfig(config: AgentMeshConfig): AgentMeshSettin
     autoBeginEnrollment: config.autoBeginEnrollment ?? true,
     stopNodeOnExit: config.stopNodeOnExit ?? true,
     nodeControlPlane: config.nodeControlPlane ?? '',
+    nodeBinary: config.nodeBinary ?? '',
     nodeEnrollmentCredentialRef: config.nodeEnrollmentCredentialRef ?? '',
     tcpUrl: config.tcpUrl,
     timeoutMs: config.timeoutMs,

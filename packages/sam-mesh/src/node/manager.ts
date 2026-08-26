@@ -304,6 +304,40 @@ async status(): Promise<NodeStatus> {
 
   private binarySource: 'env' | 'bundled' | 'path' | null = null
 
+  /**
+   * Every usable sam-node on this machine, with the one we'd pick marked.
+   * Suggestion order: bundled (version-pinned to the kit, integrity-checked)
+   * > explicit env/option > PATH. Powers the card's dropdown and
+   * `sam-mesh node binary`.
+   */
+  async binaryOptions(): Promise<Array<{ path: string; source: 'env' | 'bundled' | 'path'; suggested: boolean; tag?: string }>> {
+    const options: Array<{ path: string; source: 'env' | 'bundled' | 'path'; suggested: boolean; tag?: string }> = []
+    if (this.binary.includes('/') && await pathExecutable(this.binary)) {
+      options.push({ path: this.binary, source: 'env', suggested: false })
+    }
+    try {
+      const bundled = await resolveBundledBinary(this.dataDir)
+      if (bundled) options.push({ path: bundled.path, source: 'bundled', suggested: true, tag: bundled.tag })
+    } catch { /* no bundle for this platform */ }
+    const seen = new Set(options.map(o => o.path))
+    const candidates = [...(process.env.PATH ?? '').split(':'), join(homedir(), '.local', 'bin'), '/usr/local/bin', '/usr/bin']
+    for (const dir of candidates) {
+      if (!dir) continue
+      const candidate = join(dir, 'sam-node')
+      if (!seen.has(candidate) && await pathExecutable(candidate)) {
+        seen.add(candidate)
+        options.push({ path: candidate, source: 'path', suggested: options.length === 0 })
+      }
+    }
+    // No bundle? The first non-env hit becomes the suggestion (env entries
+    // are the user's explicit override, never our suggestion).
+    if (options.length > 0 && !options.some(o => o.suggested)) {
+      const idx = options.findIndex(o => o.source !== 'env')
+      if (idx >= 0) options[idx]!.suggested = true
+    }
+    return options
+  }
+
   private async resolveBinary(): Promise<string | null> {
     this.binarySource = null
     if (this.binary.includes('/')) {

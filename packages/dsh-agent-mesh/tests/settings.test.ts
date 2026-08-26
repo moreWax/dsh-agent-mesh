@@ -14,6 +14,7 @@ describe('agent-mesh settings namespace', () => {
       autoBeginEnrollment: true,
       stopNodeOnExit: true,
       nodeControlPlane: '',
+      nodeBinary: '',
       nodeEnrollmentCredentialRef: '',
       tcpUrl: 'http://127.0.0.1:8080',
       timeoutMs: 30_000,

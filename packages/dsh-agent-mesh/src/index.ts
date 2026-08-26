@@ -169,7 +169,16 @@ export function apply(ctx: Context, input: Config): void {
   }
 
   const dir = dataDirOf(config.socketPath)
-  const nodes = new SamNodeManager({ ...(dir ? { dataDir: dir } : {}), announcePrivate: config.nodeAnnouncePrivate ?? true })
+  // nodeBinary from the SETTINGS base (user's dropdown choice overrides the
+  // row config); '' = auto → the manager's bundled suggestion wins. Applies
+  // on restart like the rest of the node lifecycle knobs.
+  const settings0 = settings()
+  const binaryChoice = (settings0.nodeBinary || config.nodeBinary || '').trim()
+  const nodes = new SamNodeManager({
+    ...(dir ? { dataDir: dir } : {}),
+    announcePrivate: config.nodeAnnouncePrivate ?? true,
+    ...(binaryChoice ? { samNode: binaryChoice } : {}),
+  })
   const ownership: NodeOwnership = { startedByUs: false }
   new AgentMeshWebHost(ctx, service, nodes, ownership, settings, resolveEnrollmentToken, ensureNodeToken)
   ctx.provide("agentMeshStatus", new CordisMeshStatus(operator))

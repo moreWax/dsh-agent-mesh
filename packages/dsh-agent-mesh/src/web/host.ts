@@ -27,7 +27,7 @@ export type NodeStatusView = NodeStatus & { managedByDsh: boolean }
 export type ActionResult = { ok: true; message: string; value?: unknown } | { ok: false; error: string }
 
 export class AgentMeshWebHost extends TypertRemoteService {
-  constructor(ctx: Context, private readonly mesh: AgentMeshService, private readonly nodes = new SamNodeManager(), private readonly ownership: NodeOwnership = { startedByUs: false }, private readonly settings: () => AgentMeshSettings = () => ({ autoStartNode: true, autoBeginEnrollment: true, stopNodeOnExit: true, nodeControlPlane: "", nodeEnrollmentCredentialRef: "", tcpUrl: "", timeoutMs: 30_000, preferSocket: true, socketPath: false }), private readonly resolveEnrollmentToken: () => Promise<string | undefined> = async () => undefined, private readonly ensureNodeToken: () => Promise<string | undefined> = async () => undefined) { super(ctx, "agentMeshWeb") }
+  constructor(ctx: Context, private readonly mesh: AgentMeshService, private readonly nodes = new SamNodeManager(), private readonly ownership: NodeOwnership = { startedByUs: false }, private readonly settings: () => AgentMeshSettings = () => ({ autoStartNode: true, autoBeginEnrollment: true, stopNodeOnExit: true, nodeControlPlane: "", nodeBinary: "", nodeEnrollmentCredentialRef: "", tcpUrl: "", timeoutMs: 30_000, preferSocket: true, socketPath: false }), private readonly resolveEnrollmentToken: () => Promise<string | undefined> = async () => undefined, private readonly ensureNodeToken: () => Promise<string | undefined> = async () => undefined) { super(ctx, "agentMeshWeb") }
 
   @Remote("snapshot")
   async snapshot(): Promise<MeshDashboardSnapshot> {
@@ -53,6 +53,21 @@ export class AgentMeshWebHost extends TypertRemoteService {
   /** Node status plus lifecycle ownership: managedByDsh means quitting dsh stops the node. */
   @Remote("nodeStatus") async nodeStatus(): Promise<NodeStatusView> {
     return { ...await this.nodes.status(), managedByDsh: this.ownership.startedByUs }
+  }
+
+  /** Every usable sam-node on this machine + the current selection. The
+   * suggestion is marked; the card renders the dropdown from this. */
+  @Remote("nodeBinaryOptions") async nodeBinaryOptions(): Promise<{
+    options: Array<{ path: string; source: 'env' | 'bundled' | 'path'; suggested: boolean; tag?: string }>
+    selected: string
+    auto: boolean
+  }> {
+    const options = await this.nodes.binaryOptions()
+    const selected = this.settings().nodeBinary
+    const suggested = options.find(o => o.suggested)
+    // '' (auto) effectively resolves to the suggestion — reflect that so the
+    // card can show "Auto (bundled v0.1.0-alpha.7)" as the current value.
+    return { options, selected: selected || suggested?.path || '', auto: !selected }
   }
 
   @Remote("startNode") async startNode(approval: ApprovedAction): Promise<ActionResult> {
