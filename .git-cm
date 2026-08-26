@@ -1,0 +1,3 @@
+feat(setup): end inside the running product — offer to launch the Web UI (browser opens itself)
+
+The harness CLI opens the browser by default (--no-open exists to suppress it), so the last prompt of setup is: start the Web UI now? One Enter runs the server in the foreground from the harness checkout; Ctrl+C stops it and prints the restart command. README flow gains step 5.

@@ -173,6 +173,22 @@ async function main() {
         say('  node --import tsx/esm apps/cli/src/bin.ts --profile web --port 3080')
       }
       say('Enroll, discover fleets, join, approve — all in the card from here.')
+      // Finish INSIDE the running product, like the harness's own installer:
+      // one Enter launches the Web UI in the foreground; the dsh CLI opens
+      // the browser itself (its --no-open flag exists to suppress exactly
+      // this). Ctrl+C stops the server and lands you back at your shell.
+      if (await ask(rl, 'Start the Web UI now? (Ctrl+C stops it)')) {
+        const [scmd, ...sargs] = harness.kind === 'bin'
+          ? ['dsh', '--profile', 'web', '--port', '3080']
+          : ['node', '--import', 'tsx/esm', join(harness.dir, HARNESS_CLI), '--profile', 'web', '--port', '3080']
+        say()
+        say('Starting the Web UI — the browser opens on its own. Go to Settings → Agent Mesh.')
+        spawnSync(scmd, sargs, { cwd: harness.kind === 'checkout' ? harness.dir : ROOT, stdio: 'inherit' })
+        say()
+        say('Web UI stopped. To start it again:')
+        if (harness.kind === 'bin') say('  dsh --profile web --port 3080')
+        else { say(`  cd ${harness.dir}`); say('  node --import tsx/esm apps/cli/src/bin.ts --profile web --port 3080') }
+      }
     } else {
       manual(harness)
     }
