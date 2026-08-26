@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { SamNodeManager, type EnrollmentInfo, type NodeStatus } from "@morewax/sam-mesh/node"
+import { buildChecks, type DoctorCheck } from "@morewax/sam-mesh/plan"
 import type { NodeOwnership } from "../index.js"
 import type { AgentMeshSettings } from "../settings.js"
 import type { Context } from "@deepseek-ai/cordis"
@@ -105,6 +106,27 @@ export class AgentMeshWebHost extends TypertRemoteService {
       ? { ok: true, message: "Enrollment cancelled" }
       : { ok: false, error: "No such enrollment session (already finished or expired)" }
   }
+  /**
+   * The same checks as `sam-mesh doctor`, surfaced for the card's onboarding
+   * wizard. Ungated read: it only probes local state.
+   */
+  @Remote("meshDoctor") async meshDoctor(): Promise<{ checks: DoctorCheck[] }> {
+    const status = await this.nodes.status()
+    let peerCount: number | undefined
+    let serviceCount: number | undefined
+    let localServiceCount = 0
+    if (status.running) {
+      try {
+        const mesh = await this.mesh.core.getMeshInfo()
+        peerCount = Array.isArray(mesh.connected_peers) ? mesh.connected_peers.length : 0
+        const remote = await this.mesh.core.discoverRemoteServices({ type: "mcp" })
+        serviceCount = remote.length
+        localServiceCount = (await this.mesh.core.listLocalServices()).length
+      } catch { peerCount = undefined }
+    }
+    return { checks: buildChecks({ installed: status.installed, enrolled: status.enrolled, running: status.running, peerCount, serviceCount, localServiceCount }) }
+  }
+
   @Remote("installSkill") async installSkill(request: SkillInstallRequest, approval: ApprovedAction): Promise<ActionResult> {
     if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
     const plan = this.mesh.operator.planSkillInstall(request)

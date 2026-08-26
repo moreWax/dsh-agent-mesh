@@ -48,18 +48,18 @@ export function formatMintBlock(token: string, controlPlane: string): string {
 
 // ─── doctor ────────────────────────────────────────────────────────────────
 
-export interface DoctorCheck { name: string; ok: boolean; detail?: string; fix?: string }
+export interface DoctorCheck { name: string; ok: boolean; detail?: string | undefined; fix?: string | undefined }
 
 export interface DoctorInputs {
   installed: boolean
   enrolled: boolean
   running: boolean
   /** Connected peers EXCLUDING self, as reported by mesh info. undefined = daemon not reachable. */
-  peerCount?: number
+  peerCount?: number | undefined
   /** Services visible through discovery. undefined = not queried (daemon down). */
-  serviceCount?: number
+  serviceCount?: number | undefined
   /** Own services registered with the local node. */
-  localServiceCount?: number
+  localServiceCount?: number | undefined
 }
 
 /** Each failed check carries the exact next command — doctor is advice, not just status. */
@@ -126,4 +126,40 @@ export function expandPeer(input: string, knownPeers: string[]): PeerMatch {
   const matches = knownPeers.filter(p => p.startsWith(input))
   if (matches.length === 1) return { ok: true, peer: matches[0]! }
   return { ok: false, candidates: matches.length > 1 ? matches : [...knownPeers].sort() }
+}
+
+// ─── token handoff ─────────────────────────────────────────────────────────
+
+/**
+ * One-liner an operator pastes on THIS machine to place the token on the
+ * joining machine over SSH. The token is alphanumeric+dash, so plain
+ * single-quoting is safe. Printed, never executed — remote writes need an
+ * explicit human paste.
+ */
+export function formatSshHandoff(token: string, sshTarget: string): string {
+  return `ssh ${sshTarget} "printf '%s' '${token}' > ~/sam-join-token && chmod 600 ~/sam-join-token"`
+}
+
+/** QR output uses the system `qrencode` when present; we do not vendor a QR engine. */
+export const QR_MISSING_HINT =
+  'install qrencode for terminal QR output (brew install qrencode / apt install qrencode) — or use the paste block above'
+
+// ─── task tail ─────────────────────────────────────────────────────────────
+
+const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'expired'])
+
+/** Extract the pieces the tail loop needs from a task_watch payload. Pure. */
+export function parseWatch(payload: unknown): {
+  status?: string | undefined; cursor?: string | undefined; terminal: boolean; events: unknown[]
+} {
+  const value = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>
+  const task = (value.task && typeof value.task === 'object' ? value.task : {}) as Record<string, unknown>
+  const status = typeof task.status === 'string' ? task.status : undefined
+  const events = Array.isArray(value.events) ? value.events : []
+  return {
+    status,
+    cursor: typeof value.cursor === 'string' ? value.cursor : undefined,
+    terminal: status !== undefined && TERMINAL.has(status),
+    events,
+  }
 }

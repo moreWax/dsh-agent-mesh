@@ -27,6 +27,9 @@
       ],
       "@morewax/sam-mesh/node": [
         "../sam-mesh/src/node/index.ts"
+      ],
+      "@morewax/sam-mesh/plan": [
+        "../sam-mesh/src/cli/plan.ts"
       ]
     },
     "baseUrl": "."

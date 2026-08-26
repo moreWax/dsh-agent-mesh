@@ -18,7 +18,7 @@ import { join } from "node:path"
 import { homedir } from "node:os"
 import { stdout, stderr, exit } from "node:process"
 import { SamClient } from "../core/index.js"
-import { expandPeer, shortId } from "./plan.js"
+import { expandPeer, parseWatch, shortId } from "./plan.js"
 
 function usage(): never {
   console.log(`Usage: dsh-agent-mesh <status|services|tools|models|call> [args]
@@ -29,7 +29,7 @@ Commands:
   tools [--filter <json>]     Remote tool roster
   models                      Mesh inference models
   peers                       Connected peers, short ids + the services each offers
-  call <peer> <tool> [json]   Call a remote tool (peer id or unique prefix; bare tool names auto-qualify)
+  call <peer> <tool> [json]   Call a remote tool (peer id or unique prefix; bare tool names auto-qualify)\n  tail <peer> <task-id>       Stream a remote task's events until it settles (Ctrl+C detaches)
 
 Connection: SAM_SOCKET (default ~/.config/sam-mesh/sam.sock), SAM_TCP_URL (default http://127.0.0.1:8080).`)
   exit(0)
@@ -57,6 +57,19 @@ function client(): SamClient {
   const socketPath = process.env.SAM_SOCKET ?? join(homedir(), ".config", "sam-mesh", "sam.sock")
   const tcpUrl = process.env.SAM_TCP_URL ?? "http://127.0.0.1:8080"
   return new SamClient({ socketPath, tcpUrl, preferSocket: true, timeoutMs: 15_000 })
+}
+
+async function resolvePeer(sam: SamClient, peerArg: string): Promise<string> {
+  const mesh = await sam.getMeshInfo()
+  const knownPeers = Array.isArray(mesh.connected_peers) ? mesh.connected_peers : []
+  const match = expandPeer(peerArg, knownPeers)
+  if (!match.ok) {
+    stderr.write(match.candidates.length > 0
+      ? `ambiguous peer "${peerArg}": ${match.candidates.map(shortId).join(", ")}\n`
+      : `unknown peer "${peerArg}" — try: sam-mesh peers\n`)
+    exit(2)
+  }
+  return match.peer
 }
 
 export async function runClient(args: string[]): Promise<void> {
@@ -94,16 +107,7 @@ export async function runClient(args: string[]): Promise<void> {
     case "call": {
       const [peerArg, rawTool, argsText] = rest
       if (!peerArg || !rawTool) { stderr.write("call requires <peer> and <tool> — see the services roster for peer ids\n"); exit(2) }
-      const mesh = await sam.getMeshInfo()
-      const knownPeers = Array.isArray(mesh.connected_peers) ? mesh.connected_peers : []
-      const match = expandPeer(peerArg, knownPeers)
-      if (!match.ok) {
-        stderr.write(match.candidates.length > 0
-          ? `ambiguous peer "${peerArg}": ${match.candidates.map(shortId).join(", ")}\n`
-          : `unknown peer "${peerArg}" — try: sam-mesh peers\n`)
-        exit(2)
-      }
-      const peer = match.peer
+      const peer = await resolvePeer(sam, peerArg)
       // Auto-qualify a bare name against the target peer's discovered
       // services: one match -> mcp://<service>/<tool>; several -> list them.
       // Explicit URIs (contain '://') pass through untouched.
@@ -123,6 +127,32 @@ export async function runClient(args: string[]): Promise<void> {
         }
       }
       print(await sam.callRemoteTool({ peer_id: peer, tool_name: tool, arguments: parseJson(argsText, {}) }))
+      return
+    }
+    case "tail": {
+      const [peerArg, taskId] = rest
+      if (!peerArg || !taskId) { stderr.write("tail requires <peer> and <task-id>\n"); exit(2) }
+      const peer = await resolvePeer(sam, peerArg)
+      const services = (await sam.discoverRemoteServices({ type: "mcp" })).filter(s => s.peer_id === peer && s.srv_name)
+      if (services.length !== 1) {
+        stderr.write(services.length === 0
+          ? `peer ${shortId(peer)} announces no services — nothing to tail\n`
+          : `peer ${shortId(peer)} announces ${services.length} services; tail needs exactly one task service\n`)
+        exit(2)
+      }
+      const watchTool = `mcp://${services[0]!.srv_name}/task_watch`
+      stderr.write(`tailing ${taskId} on ${shortId(peer)} via ${watchTool} — Ctrl+C to detach\n`)
+      let cursor: string | undefined
+      for (;;) {
+        const res = await sam.callRemoteTool({
+          peer_id: peer, tool_name: watchTool,
+          arguments: { taskId, waitMs: 2000, ...(cursor ? { cursor } : {}) },
+        })
+        const watch = parseWatch(res.structuredContent)
+        for (const event of watch.events) stdout.write(`${JSON.stringify(event)}\n`)
+        cursor = watch.cursor ?? cursor
+        if (watch.terminal) { stdout.write(`task ${watch.status}\n`); break }
+      }
       return
     }
     default:

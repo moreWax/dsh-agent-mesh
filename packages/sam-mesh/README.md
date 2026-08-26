@@ -15,11 +15,20 @@ npx @morewax/sam-mesh node join --bootstrap-token-path <file>
                                                  # the hub operator mints the token out of band
 npx @morewax/sam-mesh node start | node stop     # daemon lifecycle (idempotent)
 
+npx @morewax/sam-mesh doctor                     # am I on the mesh? every failure prints its fix
 npx @morewax/sam-mesh status                     # mesh + node snapshot
+npx @morewax/sam-mesh peers                      # connected peers: short ids + services offered
 npx @morewax/sam-mesh services [--filter <json>] # discover remote services
 npx @morewax/sam-mesh tools [--filter <json>]    # remote tool roster (note peer ids)
 npx @morewax/sam-mesh models                     # mesh inference models
 npx @morewax/sam-mesh call <peer> <tool> '{"arg": "value"}'
+                                                 # peer id OR unique prefix; bare tool names
+                                                 # auto-qualify to mcp://<service>/<tool>
+npx @morewax/sam-mesh tail <peer> <task-id>      # stream a remote task's events until it settles
+npx @morewax/sam-mesh token mint --control-plane <url> --admin-token-path <file> [--ssh user@host] [--qr]
+                                                 # mint a single-use enrollment token; optional
+                                                 # ssh handoff one-liner / terminal QR (qrencode)
+npx @morewax/sam-mesh skill                      # print the agent-facing onboarding doc
 ```
 
 Env: `SAM_NODE` (binary override), `SAM_DATA_DIR` (default

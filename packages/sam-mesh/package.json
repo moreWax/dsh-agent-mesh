@@ -17,7 +17,11 @@
       "types": "./lib/node/index.d.mts",
       "default": "./lib/node/index.mjs"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./plan": {
+      "types": "./lib/cli/plan.d.mts",
+      "default": "./lib/cli/plan.mjs"
+    }
   },
   "bin": {
     "sam-mesh": "./lib/cli/index.mjs"

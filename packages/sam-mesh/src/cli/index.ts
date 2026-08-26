@@ -22,9 +22,10 @@ import { stdout as out, stdin as inp, stdout, stderr, exit, argv } from 'node:pr
 import { createInterface } from 'node:readline/promises'
 import { runClient } from './client.js'
 import { SamNodeManager, DEFAULT_CONTROL_PLANE } from '../node/index.js'
-import { INSTALL_INSTRUCTION, SAM_INSTALL_CMD, buildChecks, expandPeer, formatMintBlock, nextJoinStep, renderDoctor } from './plan.js'
+import { INSTALL_INSTRUCTION, QR_MISSING_HINT, SAM_INSTALL_CMD, buildChecks, expandPeer, formatMintBlock, formatSshHandoff, nextJoinStep, renderDoctor } from './plan.js'
+import { AGENT_SKILL } from './skill-doc.js'
 
-const CLIENT_COMMANDS = new Set(['status', 'peers', 'services', 'tools', 'models', 'call'])
+const CLIENT_COMMANDS = new Set(['status', 'peers', 'services', 'tools', 'models', 'call', 'tail'])
 
 function manager(): SamNodeManager {
   return new SamNodeManager({
@@ -145,7 +146,7 @@ async function runNode(args: string[]): Promise<void> {
 
 const [, , command, ...rest] = argv
 if (!command || command === '--help' || command === '-h') {
-  stdout.write(`Usage: sam-mesh <status|peers|services|tools|models|call|node|token|doctor> [args]
+  stdout.write(`Usage: sam-mesh <status|peers|services|tools|models|call|tail|node|token|doctor|skill> [args]
 
 Mesh client (local node must be running):
   status                      Mesh + node snapshot
@@ -190,6 +191,15 @@ else if (command === 'token' && rest[0] === 'mint') {
   if (!minted.token) { stderr.write('mint failed: response carried no token\n'); exit(1) }
   stdout.write(`minted ${role}, expires ${minted.expires_at ?? 'n/a'}\n\n`)
   stdout.write(formatMintBlock(minted.token, controlPlane))
+  const sshIndex = rest.indexOf('--ssh')
+  if (sshIndex >= 0 && rest[sshIndex + 1]) {
+    stdout.write('\n# or place it over ssh:\n')
+    stdout.write(formatSshHandoff(minted.token, rest[sshIndex + 1]!) + '\n')
+  }
+  if (rest.includes('--qr')) {
+    const child = spawn('qrencode', ['-t', 'ANSIUTF8', formatMintBlock(minted.token, controlPlane)], { stdio: 'inherit' })
+    child.once('error', () => stderr.write(`\n${QR_MISSING_HINT}\n`))
+  }
 }
 else if (command === 'doctor') {
   const nodes = manager()
@@ -213,6 +223,7 @@ else if (command === 'doctor') {
   })
   stdout.write(renderDoctor(checks) + '\n')
 }
+else if (command === 'skill') stdout.write(AGENT_SKILL + '\n')
 else if (command === 'node') await runNode(rest)
 else if (CLIENT_COMMANDS.has(command)) await runClient([command, ...rest])
 else { stderr.write(`Unknown command: ${command}\n`); exit(2) }
