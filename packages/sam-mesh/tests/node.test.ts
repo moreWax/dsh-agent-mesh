@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { mkdtemp, mkdir, rm, writeFile, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -99,12 +101,17 @@ describe('SamNodeManager', () => {
     expect(status.enrolled).toBe(false)
   })
 
-  it('reads an agent.db carrying a control-plane URL as enrolled', async () => {
+  it('reads a real enrolled store as enrolled, and a reset one as unenrolled (live bbolt walk)', async () => {
+    // Stray URL bytes are NOT enrollment: bbolt's freelist retains them after
+    // reset. Ground truth = live identity/identity_biscuit key (bbolt.test.ts
+    // covers the reader; this pins the manager's wiring of it).
     await mkdir(join(dir, 'data'), { recursive: true })
-    const store = Buffer.concat([Buffer.alloc(1024), Buffer.from('https://hub.example:8480'), Buffer.alloc(1024)])
-    await writeFile(join(dir, 'data', 'agent.db'), store)
-    const status = await manager.status()
-    expect(status.enrolled).toBe(true)
+    const enrolled = readFileSync(fileURLToPath(new URL('./fixtures/agent-enrolled.db', import.meta.url)))
+    await writeFile(join(dir, 'data', 'agent.db'), enrolled)
+    expect((await manager.status()).enrolled).toBe(true)
+    const reset = readFileSync(fileURLToPath(new URL('./fixtures/agent-reset.db', import.meta.url)))
+    await writeFile(join(dir, 'data', 'agent.db'), reset)
+    expect((await manager.status()).enrolled).toBe(false)
   })
 
   it('enrolls with a bootstrap token: right args, 0600 file, scrubbed on settle, no device flow', async () => {

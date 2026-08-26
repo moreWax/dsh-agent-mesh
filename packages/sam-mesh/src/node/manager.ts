@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
+import { hasMeshIdentity } from './bbolt.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -171,7 +172,12 @@ export class SamNodeManager {
   private async detectEnrolled(): Promise<boolean> {
     let data: Buffer
     try { data = await readFile(this.identityPath) } catch { return false }
-    return data.includes('http://') || data.includes('https://')
+    // Live bbolt walk, not a byte scan: `sam-node reset` deletes keys from
+    // live pages only (freelist keeps stale copies), so scanning for the
+    // control-plane URL false-positives on reset machines. Ground truth is
+    // sam-node's own LoadIdentity predicate: identity/identity_biscuit
+    // present and non-empty.
+    return hasMeshIdentity(data)
   }
 
   async status(): Promise<NodeStatus> {
