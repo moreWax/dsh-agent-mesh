@@ -79,8 +79,9 @@ export function createInferenceProxyServer(options: InferenceProxyOptions): Serv
 }
 
 export interface AnnounceOptions {
-  /** POSTs to the local node, e.g. (path, opts) => sam.request(path, opts). */
-  request: <T>(path: string, opts: { method: string; body?: unknown }) => Promise<T>
+  /** Sends the register body to the local node; must throw on non-2xx.
+   *  (Use requestRaw: /sam/service/register answers a non-JSON body.) */
+  register: (body: unknown) => Promise<void>
   name: string
   targetUrl: string
   intervalMs?: number
@@ -100,7 +101,7 @@ export function startAnnounceLoop(options: AnnounceOptions): () => void {
   const body = { service: { name: options.name, type: 'SERVICE_TYPE_INFERENCE', description: 'capability-gated mesh inference (listing open, execution gated)' }, target_url: options.targetUrl }
   const tick = async (): Promise<void> => {
     try {
-      await options.request('/sam/service/register', { method: 'POST', body })
+      await options.register(body)
       log(`announced inference service ${options.name} -> ${options.targetUrl}`)
     } catch (error) {
       log(`announce failed (retrying): ${error instanceof Error ? error.message : String(error)}`)

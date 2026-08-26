@@ -70,7 +70,7 @@ describe('startAnnounceLoop', () => {
   it('registers as SERVICE_TYPE_INFERENCE and re-announces until stopped', async () => {
     const calls: unknown[] = []
     const stop = startAnnounceLoop({
-      request: async <T,>(_path: string, opts: { method: string; body?: unknown }): Promise<T> => { calls.push(opts.body); return undefined as T },
+      register: async (body) => { calls.push(body) },
       name: 'morewax-gpu-inference', targetUrl: 'http://127.0.0.1:4100', intervalMs: 10,
     })
     await new Promise((resolve) => setTimeout(resolve, 45))
@@ -84,7 +84,7 @@ describe('startAnnounceLoop', () => {
 
   it('tolerates register failures and keeps retrying', async () => {
     let calls = 0
-    const stop = startAnnounceLoop({ request: async (): Promise<never> => { calls++; throw new Error('node booting') }, name: 'x', targetUrl: 'http://127.0.0.1:1', intervalMs: 10 })
+    const stop = startAnnounceLoop({ register: async (): Promise<never> => { calls++; throw new Error('node booting') }, name: 'x', targetUrl: 'http://127.0.0.1:1', intervalMs: 10 })
     await new Promise((resolve) => setTimeout(resolve, 35))
     stop()
     expect(calls).toBeGreaterThan(1)

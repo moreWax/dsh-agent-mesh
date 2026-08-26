@@ -59,7 +59,11 @@ async function runInferenceProxy(args: string[]): Promise<void> {
   if (announceName) {
     const { SamClient } = await import('../core/index.js')
     const sam = new SamClient()
-    stopAnnounce = startAnnounceLoop({ request: (path, opts) => sam.request(path, opts), name: announceName, targetUrl: `http://${host}:${port}`, onLog: log })
+    const register = async (body: unknown): Promise<void> => {
+      const res = await sam.requestRaw('/sam/service/register', { method: 'POST', body })
+      if (res.status < 200 || res.status >= 300) throw new Error(`register failed (${res.status})`)
+    }
+    stopAnnounce = startAnnounceLoop({ register, name: announceName, targetUrl: `http://${host}:${port}`, onLog: log })
     log(`announcing as ${announceName} (re-announces every 30s; survives node restarts)`)
   }
   const shutdown = (): void => { stopAnnounce?.(); server.close(() => exit(0)); setTimeout(() => exit(0), 2000).unref() }
