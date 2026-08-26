@@ -1,0 +1,6 @@
+This package redistributes the sam-node binary from google/sam
+(https://github.com/google/sam), licensed under the Apache License 2.0,
+as official release artifacts pinned by tag and verified against the
+release's published SHA-256 checksums at pack time (see
+scripts/fetch-sam-binaries.mjs and each platform package's
+bin/manifest.json).

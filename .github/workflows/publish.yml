@@ -24,8 +24,12 @@ jobs:
       - run: pnpm run -r typecheck
       - run: pnpm run -r test
       - run: pnpm run -r build
-      # pnpm publishes in dependency order (sam-mesh first) and rewrites
-      # workspace:* to the concrete version at pack time.
+      # Vendor the checksum-verified sam-node binaries into the platform
+      # packages BEFORE publish (bin/ is gitignored; the npm tarball carries
+      # them so users never download anything at install time).
+      - run: node scripts/fetch-sam-binaries.mjs
+      # pnpm publishes in dependency order (platform packages + sam-mesh
+      # before dsh-agent-mesh) and rewrites workspace:* at pack time.
       - run: pnpm -r publish --access public --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

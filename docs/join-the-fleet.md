@@ -6,7 +6,9 @@ the requester's ephemeral key — **no ssh, no files, no copied secrets**.
 
 ## Completely through the UI (dsh machines)
 
-On the NEW machine, with dsh + the plugin installed: **Settings → agent-mesh**
+On the NEW machine: install dsh, `dsh plugin add @morewax/dsh-agent-mesh`
+(that one install carries sam-node itself — nothing else to download),
+then **Settings → agent-mesh**
 
 1. **Enroll this machine** (Mesh node section) — device flow URL + code
    appear in the card; approve in the browser. Node starts.

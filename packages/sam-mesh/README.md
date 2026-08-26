@@ -4,6 +4,13 @@ SAM mesh client + node kit. Talks to a local `sam-node` — **no DeepSeek
 Harness required** — and manages the node's lifecycle so any machine can
 join the mesh. Zero runtime dependencies.
 
+**`sam-node` is carried by the package.** The official google/sam release
+binary for your platform ships inside `@morewax/sam-node-<os>-<arch>`
+(optional dependency — you download only your platform, ~13MB gzipped),
+checksum-verified at pack time and integrity-checked again at first use.
+No installer script, no install-time network, no second tool. `SAM_NODE`
+env or a PATH install still overrides.
+
 ## CLI
 
 ```bash

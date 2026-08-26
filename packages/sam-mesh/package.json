@@ -28,7 +28,8 @@
   },
   "files": [
     "lib",
-    "README.md"
+    "README.md",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsdown",
@@ -51,5 +52,11 @@
     "type": "git",
     "url": "github:moreWax/dsh-agent-mesh",
     "directory": "packages/sam-mesh"
+  },
+  "optionalDependencies": {
+    "@morewax/sam-node-darwin-arm64": "workspace:*",
+    "@morewax/sam-node-darwin-x64": "workspace:*",
+    "@morewax/sam-node-linux-x64": "workspace:*",
+    "@morewax/sam-node-linux-arm64": "workspace:*"
   }
 }

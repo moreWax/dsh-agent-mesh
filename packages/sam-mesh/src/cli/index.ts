@@ -229,6 +229,10 @@ else if (command === 'doctor') {
     const enrolledCheck = checks.find(ch => ch.name === 'enrolled on a hub')
     if (enrolledCheck) enrolledCheck.detail = status.enrolledHub
   }
+  if (status.installed && status.binarySource) {
+    const binaryCheck = checks.find(ch => ch.name === 'sam-node binary')
+    if (binaryCheck) binaryCheck.detail = status.binarySource === 'bundled' ? 'carried by the package' : `${status.binarySource}: ${status.binaryPath}`
+  }
   stdout.write(renderDoctor(checks) + '\n')
 }
 else if (command === 'fleet') await runFleet(rest)

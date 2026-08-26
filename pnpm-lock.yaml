@@ -123,6 +123,27 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(yaml@2.9.0)
+    optionalDependencies:
+      '@morewax/sam-node-darwin-arm64':
+        specifier: workspace:*
+        version: link:../sam-node-darwin-arm64
+      '@morewax/sam-node-darwin-x64':
+        specifier: workspace:*
+        version: link:../sam-node-darwin-x64
+      '@morewax/sam-node-linux-arm64':
+        specifier: workspace:*
+        version: link:../sam-node-linux-arm64
+      '@morewax/sam-node-linux-x64':
+        specifier: workspace:*
+        version: link:../sam-node-linux-x64
+
+  packages/sam-node-darwin-arm64: {}
+
+  packages/sam-node-darwin-x64: {}
+
+  packages/sam-node-linux-arm64: {}
+
+  packages/sam-node-linux-x64: {}
 
 packages:
 

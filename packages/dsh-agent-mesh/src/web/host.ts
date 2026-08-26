@@ -135,6 +135,10 @@ export class AgentMeshWebHost extends TypertRemoteService {
       const enrolledCheck = checks.find(c => c.name === "enrolled on a hub")
       if (enrolledCheck) enrolledCheck.detail = status.enrolledHub
     }
+    if (status.installed && status.binarySource) {
+      const binaryCheck = checks.find(c => c.name === "sam-node binary")
+      if (binaryCheck) binaryCheck.detail = status.binarySource === "bundled" ? "carried by the package" : `${status.binarySource}: ${status.binaryPath}`
+    }
     return { checks }
   }
 

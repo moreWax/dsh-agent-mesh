@@ -15,6 +15,7 @@ import { homedir } from 'node:os'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { hasMeshIdentity, readEnrolledHub } from './bbolt.js'
+import { resolveBundledBinary } from './bundled.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -39,6 +40,8 @@ export interface SamNodeManagerOptions {
 export interface NodeStatus {
   installed: boolean
   binaryPath: string | null
+  /** Where the resolved binary came from: env override, the bundled package, or PATH. */
+  binarySource: 'env' | 'bundled' | 'path' | null
   enrolled: boolean
   /** The hub the node is enrolled on (live store read); null when unenrolled. */
   enrolledHub: string | null
@@ -188,7 +191,7 @@ async status(): Promise<NodeStatus> {
     } catch { /* no store yet */ }
     const running = pid !== null || await socketAnswers(this.socketPath)
     return {
-      installed: binaryPath !== null, binaryPath, enrolled, enrolledHub, running, pid,
+      installed: binaryPath !== null, binaryPath, binarySource: this.binarySource, enrolled, enrolledHub, running, pid,
       socketPath: this.socketPath, dataDir: this.dataDir,
     }
   }
@@ -299,9 +302,22 @@ async status(): Promise<NodeStatus> {
     return true
   }
 
+  private binarySource: 'env' | 'bundled' | 'path' | null = null
+
   private async resolveBinary(): Promise<string | null> {
-    if (this.binary.includes('/')) return (await pathExecutable(this.binary)) ? this.binary : null
-    // PATH first, then the documented user-local install location — service
+    this.binarySource = null
+    if (this.binary.includes('/')) {
+      const ok = (await pathExecutable(this.binary)) ? this.binary : null
+      if (ok) this.binarySource = 'env'
+      return ok
+    }
+    // The npm package CARRIES sam-node: bundled (lazy-extracted, integrity-
+    // verified) wins over PATH so a fresh `dsh plugin add` just works.
+    try {
+      const bundled = await resolveBundledBinary(this.dataDir)
+      if (bundled) { this.binarySource = 'bundled'; return bundled.path }
+    } catch { /* corrupt bundle falls through to PATH */ }
+    // PATH fallback, then the documented user-local install location — service
     // managers (systemd user units) routinely run with a stripped PATH that
     // omits ~/.local/bin, and a stripped PATH must not read as "not installed".
     const candidates = [
@@ -313,7 +329,7 @@ async status(): Promise<NodeStatus> {
     for (const dir of candidates) {
       if (!dir) continue
       const candidate = join(dir, this.binary)
-      if (await pathExecutable(candidate)) return candidate
+      if (await pathExecutable(candidate)) { this.binarySource = 'path'; return candidate }
     }
     return null
   }
