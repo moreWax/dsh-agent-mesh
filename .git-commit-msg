@@ -1,0 +1,3 @@
+docs: paste-proof install blocks — idempotent clone, dsh prerequisite, no zsh-hostile inline comments
+
+A user pasted the block into interactive zsh and hit four traps: existing checkout aborted the && chain (subsequent commands ran in $HOME), inline parenthesized comments are glob patterns to zsh, and dsh was assumed installed. Blocks are now pure commands (comments in prose around them), the clone line pulls on existing checkouts, and the dsh prerequisite has its own explicit block.

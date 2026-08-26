@@ -124,19 +124,42 @@ binary` prints the same list in a terminal, ★ = suggested.
 
 ## Install from source (until npm publish lands)
 
+**Prerequisite — dsh itself** (the plugin runs inside the harness, which is
+also source-installed today). Skip this block if you already have it:
+
 ```bash
-git clone https://github.com/moreWax/dsh-agent-mesh && cd dsh-agent-mesh
+git clone https://github.com/deepseek-ai/deepseek-harness
+cd deepseek-harness
+corepack enable
 pnpm install
-pnpm fetch:binaries   # vendored sam-node: official release, checksum-verified (~13MB/platform)
-pnpm -r build         # sam-mesh first (topological), then the plugin
-dsh plugin --profile web add link:$(pwd)/packages/dsh-agent-mesh
+pnpm -r build
+cd ..
 ```
 
-Skip `fetch:binaries` and everything still works — the node manager simply
-falls back to a `sam-node` already on your PATH (`sam-mesh node binary`
-shows every candidate and the suggestion). Everything after the install —
-enroll, discover fleets, join, approve — happens in **Settings → Agent
-Mesh**; no further downloads, no terminal.
+**Then this workspace.** The first line clones, or pulls if you already have
+a checkout — safe to paste on any machine, fresh or returning:
+
+```bash
+git clone https://github.com/moreWax/dsh-agent-mesh 2>/dev/null || git -C dsh-agent-mesh pull
+cd dsh-agent-mesh
+pnpm install
+pnpm fetch:binaries
+pnpm -r build
+node ../deepseek-harness/apps/cli/src/bin.ts plugin --profile web add link:$(pwd)/packages/dsh-agent-mesh
+```
+
+What each step does:
+
+- `pnpm fetch:binaries` vendors the official sam-node release binaries
+  (checksum-verified, ~13MB for your platform). **Optional** — skip it and
+  the node manager falls back to a `sam-node` already on your PATH;
+  `sam-mesh node binary` shows every candidate and the suggestion either way.
+- `pnpm -r build` compiles sam-mesh first (topological), then the plugin.
+- The last line registers the plugin with your dsh `web` profile. Adjust the
+  path if your deepseek-harness checkout lives elsewhere.
+
+Everything after the install — enroll, discover fleets, join, approve —
+happens in **Settings → Agent Mesh**; no further downloads, no terminal.
 
 ## Development
 
