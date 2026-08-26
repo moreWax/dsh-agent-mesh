@@ -39,5 +39,13 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "github:moreWax/dsh-agent-mesh",
+    "directory": "packages/sam-mesh"
   }
 }

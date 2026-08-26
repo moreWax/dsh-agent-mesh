@@ -4,7 +4,7 @@ SAM-native capability mesh plugin for DeepSeek Harness. Part of the
 [dsh-agent-mesh workspace](https://github.com/moreWax/dsh-agent-mesh); the
 standalone client + node kit is [`@morewax/sam-mesh`](../sam-mesh).
 
-- `./core`-equivalents come from `@morewax/sam-mesh` (re-exported for compatibility)
+- Core client/node types come from [`@morewax/sam-mesh`](../sam-mesh) (a direct dependency)
 - `./tools` — policy-aware remote MCP discovery, describe and call
 - `./inference` — OpenAI-compatible mesh inference, routing and label constraints
 - `./tasks` — durable remote task vocabulary, service, and orchestration

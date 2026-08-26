@@ -6,7 +6,6 @@
   "license": "MIT",
   "exports": {
     ".": "./lib/index.js",
-    "./core": "./lib/core/index.js",
     "./tools": "./lib/tools/index.js",
     "./inference": "./lib/inference/index.js",
     "./tasks": "./lib/tasks/index.js",
@@ -109,5 +108,13 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "github:moreWax/dsh-agent-mesh",
+    "directory": "packages/dsh-agent-mesh"
   }
 }
