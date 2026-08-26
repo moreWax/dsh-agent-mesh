@@ -18,16 +18,13 @@
     "./tasks/dsh-executor": "./lib/tasks/dsh-executor.js",
     "./client": {
       "types": "./lib/client/index.d.ts",
-      "default": "./lib/client/index.js"
+      "default": "./lib/client.js"
     },
     "./remote": {
       "types": "./lib/remote.d.ts",
       "default": "./lib/remote.js"
     },
-    "./typert": {
-      "types": "./lib/typert.host.d.ts",
-      "default": "./lib/typert.host.js"
-    }
+    "./package.json": "./package.json"
   },
   "bin": {
     "dsh-agent-mesh": "./lib/cli/index.js"
@@ -38,7 +35,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsdown src/index.ts src/client/index.tsx src/remote.ts src/typert.host.ts src/cli/index.ts src/tools/index.ts src/inference/index.ts src/tasks/index.ts src/tasks/plugin.ts src/tasks/sqlite.ts src/tasks/dsh-executor.ts src/operator/index.ts src/providers/index.ts src/providers/tools-plugin.ts src/llm/index.ts --format esm --dts --out-dir lib --external @morewax/sam-mesh && chmod +x lib/cli/index.js",
+    "build": "tsdown && node scripts/check-client-bundle.mjs && chmod +x lib/cli/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "acceptance": "bash acceptance/run.sh local",
