@@ -7,7 +7,7 @@ import z from '@deepseek-ai/schemastery'
 import type { AgentMeshService } from '../index.js'
 import { InMemoryTaskStore, TaskService, type TaskExecutor } from './service.js'
 import { SQLiteTaskStore } from './sqlite.js'
-import { PairingStore } from './pairing.js'
+import { withPairing } from './pairing.js'
 import { TaskHttpServer } from './http.js'
 import { SamTaskRegistrationClient } from './registration.js'
 export const name='agent-mesh-task-service'
@@ -48,17 +48,14 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
   // service in the swarm can request the capability — approval seals the
   // invite to the requester's ephemeral key. Only meaningful with a gate:
   // an open service has no secret to deliver.
-  const pairingEnabled = config.pairing !== false && capability !== undefined
-  const service=new TaskService(store,executor,{
-    ...(pairingEnabled ? {
-      pairing: new PairingStore(),
-      pairInvite: () => JSON.stringify({
-        version: 1, controlPlane: config.pairControlPlane ?? 'https://hub.sam-mesh.dev',
-        serviceName: config.serviceName ?? 'dsh-task-service', capability: capability ?? '',
-        announcePrivate: config.pairAnnouncePrivate ?? false, createdAt: new Date().toISOString(),
-      }),
-    } : {}),
-  })
+  const service=new TaskService(store,executor)
+  if (config.pairing !== false && capability !== undefined) {
+    withPairing(service, { inviteFor: () => JSON.stringify({
+      version: 1, controlPlane: config.pairControlPlane ?? 'https://hub.sam-mesh.dev',
+      serviceName: config.serviceName ?? 'dsh-task-service', capability: capability ?? '',
+      announcePrivate: config.pairAnnouncePrivate ?? false, createdAt: new Date().toISOString(),
+    }) })
+  }
   const server=new TaskHttpServer(service,{...config,...(capability!==undefined?{capability}:{})}); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<SamTaskRegistrationClient['register']>>|undefined
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)

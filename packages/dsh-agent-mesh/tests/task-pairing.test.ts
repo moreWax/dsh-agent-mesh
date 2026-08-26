@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { generatePairKeys, open, seal } from '@morewax/sam-mesh'
-import { PairingStore } from '../src/tasks/pairing.js'
+import { PairingStore, withPairing } from '../src/tasks/pairing.js'
 import { InMemoryTaskStore, TaskService, type TaskExecutor } from '../src/tasks/service.js'
 import { TaskHttpServer } from '../src/tasks/http.js'
 
@@ -48,7 +48,7 @@ describe('PairingStore', () => {
 describe('pairing over HTTP with the capability gate on', () => {
   it('request/poll bypass the gate; list/approve require the capability', async () => {
     const pairing = new PairingStore()
-    const service = new TaskService(new InMemoryTaskStore(), {} as TaskExecutor, { pairing, pairInvite: () => INVITE })
+    const service = withPairing(new TaskService(new InMemoryTaskStore(), {} as TaskExecutor), { store: pairing, inviteFor: () => INVITE })
     const server = new TaskHttpServer(service, { capability: 'fleet-secret' })
     const address = await server.start()
     const call = async (name: string, args: Record<string, unknown>) => {

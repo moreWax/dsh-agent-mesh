@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { PairingStore } from './pairing.js'
+import { ToolRegistry, type ToolDescriptor } from './tools.js'
 import {
   isTerminalStatus, TaskProtocolError, type CancelTaskRequest, type CancelTaskResponse,
   type CollectTaskRequest, type CollectTaskResponse, type GetTaskRequest, type GetTaskResponse,
@@ -48,10 +48,6 @@ export interface TaskServiceOptions {
   id?: () => string
   /** Start locally executing newly admitted tasks. Disable when an external durable worker claims them. */
   autoStart?: boolean
-  /** Fleet pairing: when present, the service accepts fleet_pair_* tools. */
-  pairing?: PairingStore
-  /** Returns the fleet invite JSON sealed to approved joiners. Required when pairing is set. */
-  pairInvite?: () => string
 }
 
 type Waiter = { revision: number; resolve: () => void }
@@ -145,15 +141,13 @@ export class TaskService {
   private accepting = true
   private readonly idleWaiters = new Set<() => void>()
 
-  readonly pairing: PairingStore | undefined
-  readonly pairInvite: (() => string) | undefined
+  readonly tools = new ToolRegistry()
 
   constructor(readonly store: TaskStore, readonly executor: TaskExecutor, options: TaskServiceOptions = {}) {
-    this.pairing = options.pairing
-    this.pairInvite = options.pairInvite
     this.concurrency = options.concurrency ?? 4
     if (!Number.isSafeInteger(this.concurrency) || this.concurrency < 1) throw new RangeError('concurrency must be a positive safe integer')
     this.now = options.now ?? (() => new Date()); this.id = options.id ?? randomUUID; this.autoStart = options.autoStart ?? true
+    for (const tool of taskServiceTools(this)) this.tools.register(tool)
   }
   async task_submit(request: SubmitTaskRequest): Promise<SubmitTaskResponse> {
     if (!this.accepting) throw protocol('TASK_SERVICE_STOPPING', 'Task service is shutting down', true)
@@ -247,52 +241,13 @@ export class TaskService {
     await new Promise<void>(resolve => { const done = (): void => { clearTimeout(timer); this.idleWaiters.delete(done); resolve() }; const timer = setTimeout(done, waitMs); this.idleWaiters.add(done) })
   }
   /** Tool-caller compatible dispatch surface for MCP/dsh adapters. */
+  /** In-process dispatch (trusted edge — transport authz lives in http.ts). */
   async callTool(name: string, arguments_: JsonObject, options?: { signal?: AbortSignal }): Promise<unknown> {
-    switch (name) {
-      case 'task_submit': return this.task_submit(arguments_ as unknown as SubmitTaskRequest)
-      case 'task_get': return this.task_get(arguments_ as unknown as GetTaskRequest)
-      case 'task_watch': return this.task_watch(arguments_ as unknown as WatchTaskRequest, options?.signal)
-      case 'task_cancel': return this.task_cancel(arguments_ as unknown as CancelTaskRequest)
-      case 'task_collect': return this.task_collect(arguments_ as unknown as CollectTaskRequest, options?.signal)
-      // Fleet pairing. fleet_pair_request/poll are UNGATED by design (the
-      // http layer exempts them): request ids are unguessable, delivery is
-      // sealed to the requester's ephemeral key, approval is the human gate.
-      // list/approve/reject stay behind the capability gate.
-      case 'fleet_pair_request': {
-        if (!this.pairing) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
-        const req = arguments_ as unknown as { requestId?: string; publicKey?: string; label?: string }
-        if (typeof req.requestId !== 'string' || req.requestId.length < 16) throw protocol('TASK_PROTOCOL_INVALID_REQUEST', 'requestId must be a random string of at least 16 chars', false)
-        if (typeof req.publicKey !== 'string' || !req.publicKey) throw protocol('TASK_PROTOCOL_INVALID_REQUEST', 'publicKey (x25519 jwk x) is required', false)
-        const accepted = this.pairing.request(req.requestId, req.publicKey, typeof req.label === 'string' ? req.label : 'unknown')
-        if (!accepted) throw protocol('TASK_PAIRING_BUSY', 'Too many pending pair requests — try later', true)
-        return { accepted: true }
-      }
-      case 'fleet_pair_poll': {
-        if (!this.pairing) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
-        const req = arguments_ as unknown as { requestId?: string }
-        if (typeof req.requestId !== 'string') throw protocol('TASK_PROTOCOL_INVALID_REQUEST', 'requestId is required', false)
-        return this.pairing.poll(req.requestId)
-      }
-      case 'fleet_pair_list': {
-        if (!this.pairing) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
-        return { pending: this.pairing.pending() }
-      }
-      case 'fleet_pair_approve': {
-        if (!this.pairing || !this.pairInvite) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
-        const req = arguments_ as unknown as { requestId?: string; approvedBy?: string }
-        if (typeof req.requestId !== 'string') throw protocol('TASK_PROTOCOL_INVALID_REQUEST', 'requestId is required', false)
-        const approved = this.pairing.approve(req.requestId, this.pairInvite(), req.approvedBy?.trim() || 'operator')
-        if (!approved) throw protocol('TASK_PAIRING_UNKNOWN', 'No pending request with that id (expired, approved, or unknown)', false)
-        return { approved: true, requestId: approved.requestId, label: approved.label }
-      }
-      case 'fleet_pair_reject': {
-        if (!this.pairing) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
-        const req = arguments_ as unknown as { requestId?: string }
-        return { rejected: typeof req.requestId === 'string' && this.pairing.reject(req.requestId) }
-      }
-      default: throw protocol('TASK_TOOL_NOT_FOUND', `Unknown task tool: ${name}`)
-    }
+    const tool = this.tools.get(name)
+    if (!tool) throw protocol('TASK_TOOL_NOT_FOUND', `Unknown task tool: ${name}`)
+    return tool.handler(arguments_, { signal: options?.signal })
   }
+
   private enqueue(taskId: string): void { if (this.pendingSet.has(taskId)) return; this.pendingSet.add(taskId); this.pending.push(taskId); this.pump() }
   private pump(): void { while (this.active < this.concurrency) { const id = this.pending.shift(); if (!id) return; this.pendingSet.delete(id); this.active++; void this.execute(id).finally(() => { this.active--; if (this.active === 0) { for (const resolve of this.idleWaiters) resolve(); this.idleWaiters.clear() } this.pump() }) } }
   private async required(taskId: string): Promise<StoredTask> { const record = await this.store.get(taskId); if (!record) throw protocol('TASK_NOT_FOUND', `Task ${taskId} was not found`); return record }
@@ -304,4 +259,28 @@ export class TaskService {
   private async finish(taskId: string, status: 'succeeded' | 'failed' | 'expired', output?: JsonValue, error?: TaskErrorData): Promise<TaskSnapshot> { return this.mutate(taskId, task => isTerminalStatus(task.status) ? undefined : { task: { ...task, status, updatedAt: this.now().toISOString(), revision: revision(task) + 1, ...(output === undefined ? {} : { output: clone(output) }), ...(error === undefined ? {} : { error }) } }) }
   private expireOrCancel(taskId: string, deadline?: string): Promise<TaskSnapshot> { const expired = deadline !== undefined && this.parseDeadline(deadline) <= this.now().getTime(); return this.finish(taskId, expired ? 'expired' : 'failed', undefined, expired ? { code: 'TASK_DEADLINE_EXCEEDED', message: 'Task deadline elapsed', retryable: false } : { code: 'TASK_ABORTED', message: 'Task execution aborted', retryable: true }) }
   private error(cause: unknown): TaskErrorData { if (cause instanceof TaskProtocolError) return { code: cause.code, message: cause.message, retryable: cause.retryable, ...(cause.details === undefined ? {} : { details: cause.details }) }; return { code: 'TASK_EXECUTION_FAILED', message: cause instanceof Error ? cause.message : String(cause), retryable: false } }
+}
+
+/** The five task tools as descriptors — registration order is pinned by tests. */
+function taskServiceTools(service: TaskService): ToolDescriptor[] {
+  const obj = (required: string[], properties: Record<string, unknown>): Record<string, unknown> =>
+    ({ type: 'object', required, properties, additionalProperties: false })
+  const taskId = { taskId: { type: 'string', minLength: 1 } }
+  return [
+    { name: 'task_submit', description: 'Submit an idempotent durable task', auth: 'capability',
+      schema: obj(['idempotencyKey', 'input'], { idempotencyKey: { type: 'string', minLength: 1 }, input: {}, kind: { type: 'string' }, deadline: { type: 'string', format: 'date-time' }, parentTaskId: { type: 'string' }, sessionId: { type: 'string' }, agentId: { type: 'string' }, metadata: { type: 'object' } }),
+      handler: (args, ctx) => service.task_submit(args as unknown as SubmitTaskRequest) },
+    { name: 'task_get', description: 'Get a task snapshot', auth: 'capability',
+      schema: obj(['taskId'], taskId),
+      handler: (args) => service.task_get(args as unknown as GetTaskRequest) },
+    { name: 'task_watch', description: 'Long-poll task events from a cursor', auth: 'capability',
+      schema: obj(['taskId'], { ...taskId, cursor: { type: 'string' }, waitMs: { type: 'integer', minimum: 0 } }),
+      handler: (args, ctx) => service.task_watch(args as unknown as WatchTaskRequest, ctx.signal) },
+    { name: 'task_cancel', description: 'Cancel queued or running task execution', auth: 'capability',
+      schema: obj(['taskId'], { ...taskId, reason: { type: 'string' } }),
+      handler: (args) => service.task_cancel(args as unknown as CancelTaskRequest) },
+    { name: 'task_collect', description: 'Wait for a terminal task snapshot', auth: 'capability',
+      schema: obj(['taskId'], { ...taskId, deadline: { type: 'string', format: 'date-time' }, waitMs: { type: 'integer', minimum: 0 } }),
+      handler: (args, ctx) => service.task_collect(args as unknown as CollectTaskRequest, ctx.signal) },
+  ]
 }
