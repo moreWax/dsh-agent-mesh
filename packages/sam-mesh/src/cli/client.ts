@@ -18,6 +18,7 @@ import { join } from "node:path"
 import { homedir } from "node:os"
 import { stdout, stderr, exit } from "node:process"
 import { SamClient } from "../core/index.js"
+import { expandPeer, shortId } from "./plan.js"
 
 function usage(): never {
   console.log(`Usage: dsh-agent-mesh <status|services|tools|models|call> [args]
@@ -27,7 +28,8 @@ Commands:
   services [--filter <json>]  Discover remote services
   tools [--filter <json>]     Remote tool roster
   models                      Mesh inference models
-  call <peer> <tool> [json]   Call a remote tool (peer from the tools roster); prints the structured result
+  peers                       Connected peers, short ids + the services each offers
+  call <peer> <tool> [json]   Call a remote tool (peer id or unique prefix; bare tool names auto-qualify)
 
 Connection: SAM_SOCKET (default ~/.config/sam-mesh/sam.sock), SAM_TCP_URL (default http://127.0.0.1:8080).`)
   exit(0)
@@ -78,9 +80,30 @@ export async function runClient(args: string[]): Promise<void> {
       print(await sam.listModels())
       return
     }
+    case "peers": {
+      const mesh = await sam.getMeshInfo()
+      const services = await sam.discoverRemoteServices({ type: "mcp" })
+      const peers = Array.isArray(mesh.connected_peers) ? mesh.connected_peers : []
+      print(peers.map((peer: string) => ({
+        peer: shortId(peer),
+        peer_id: peer,
+        services: services.filter(s => s.peer_id === peer).map(s => s.srv_name),
+      })))
+      return
+    }
     case "call": {
-      const [peer, rawTool, argsText] = rest
-      if (!peer || !rawTool) { stderr.write("call requires <peer> and <tool> — see the services roster for peer ids\n"); exit(2) }
+      const [peerArg, rawTool, argsText] = rest
+      if (!peerArg || !rawTool) { stderr.write("call requires <peer> and <tool> — see the services roster for peer ids\n"); exit(2) }
+      const mesh = await sam.getMeshInfo()
+      const knownPeers = Array.isArray(mesh.connected_peers) ? mesh.connected_peers : []
+      const match = expandPeer(peerArg, knownPeers)
+      if (!match.ok) {
+        stderr.write(match.candidates.length > 0
+          ? `ambiguous peer "${peerArg}": ${match.candidates.map(shortId).join(", ")}\n`
+          : `unknown peer "${peerArg}" — try: sam-mesh peers\n`)
+        exit(2)
+      }
+      const peer = match.peer
       // Auto-qualify a bare name against the target peer's discovered
       // services: one match -> mcp://<service>/<tool>; several -> list them.
       // Explicit URIs (contain '://') pass through untouched.

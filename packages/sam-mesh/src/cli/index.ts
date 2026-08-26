@@ -22,9 +22,9 @@ import { stdout as out, stdin as inp, stdout, stderr, exit, argv } from 'node:pr
 import { createInterface } from 'node:readline/promises'
 import { runClient } from './client.js'
 import { SamNodeManager, DEFAULT_CONTROL_PLANE } from '../node/index.js'
-import { INSTALL_INSTRUCTION, SAM_INSTALL_CMD, formatMintBlock, nextJoinStep } from './plan.js'
+import { INSTALL_INSTRUCTION, SAM_INSTALL_CMD, buildChecks, expandPeer, formatMintBlock, nextJoinStep, renderDoctor } from './plan.js'
 
-const CLIENT_COMMANDS = new Set(['status', 'services', 'tools', 'models', 'call'])
+const CLIENT_COMMANDS = new Set(['status', 'peers', 'services', 'tools', 'models', 'call'])
 
 function manager(): SamNodeManager {
   return new SamNodeManager({
@@ -115,12 +115,23 @@ async function runNode(args: string[]): Promise<void> {
       await session.done
       if (session.state === 'complete') {
         stdout.write('Enrolled.\n')
-        if (await confirm('Start the node now?', true)) {
-          const started = await nodes.start()
-          stdout.write(started.ok ? `${started.message}\n` : `${started.error}\n`)
-          return
-        }
-        stdout.write('Start later with: sam-mesh node start\n')
+        const started = await confirm('Start the node now?', true)
+          ? await nodes.start()
+          : undefined
+        if (started) stdout.write(started.ok ? `${started.message}\n` : `${started.error}\n`)
+        else stdout.write('Start later with: sam-mesh node start\n')
+        // Epilogue: turn success into an invitation — what am I on, who is here.
+        try {
+          if (started?.ok) {
+            const sam = new (await import('../core/index.js')).SamClient()
+            const mesh = await sam.getMeshInfo()
+            const services = await sam.discoverRemoteServices({ type: 'mcp' })
+            const peerCount = Array.isArray(mesh.connected_peers) ? mesh.connected_peers.length : 0
+            stdout.write(`\nYou are on ${controlPlane}.\n`)
+            stdout.write(`Peers connected: ${peerCount}. Services visible to you: ${services.length}.\n`)
+            stdout.write('Try: npx @morewax/sam-mesh doctor   |   npx @morewax/sam-mesh services\n')
+          }
+        } catch { /* epilogue is best-effort */ }
         return
       }
       stderr.write(`Enrollment ${session.state}${session.error ? `: ${session.error}` : ''}\n`)
@@ -134,7 +145,7 @@ async function runNode(args: string[]): Promise<void> {
 
 const [, , command, ...rest] = argv
 if (!command || command === '--help' || command === '-h') {
-  stdout.write(`Usage: sam-mesh <status|services|tools|models|call|node|token> [args]
+  stdout.write(`Usage: sam-mesh <status|peers|services|tools|models|call|node|token|doctor> [args]
 
 Mesh client (local node must be running):
   status                      Mesh + node snapshot
@@ -179,6 +190,28 @@ else if (command === 'token' && rest[0] === 'mint') {
   if (!minted.token) { stderr.write('mint failed: response carried no token\n'); exit(1) }
   stdout.write(`minted ${role}, expires ${minted.expires_at ?? 'n/a'}\n\n`)
   stdout.write(formatMintBlock(minted.token, controlPlane))
+}
+else if (command === 'doctor') {
+  const nodes = manager()
+  let sam: import('../core/index.js').SamClient | undefined
+  try { sam = new (await import('../core/index.js')).SamClient() } catch { /* daemon down paths still report */ }
+  const status = await nodes.status()
+  let peerCount: number | undefined
+  let serviceCount: number | undefined
+  if (status.running && sam) {
+    try {
+      const mesh = await sam.getMeshInfo()
+      peerCount = Array.isArray(mesh.connected_peers) ? mesh.connected_peers.length : 0
+      serviceCount = (await sam.discoverRemoteServices({ type: 'mcp' })).length
+    } catch { peerCount = undefined }
+  }
+  let localServiceCount = 0
+  if (status.running && sam) { try { localServiceCount = (await sam.listLocalServices()).length } catch { localServiceCount = 0 } }
+  const checks = buildChecks({
+    installed: status.installed, enrolled: status.enrolled, running: status.running,
+    peerCount, serviceCount, localServiceCount,
+  })
+  stdout.write(renderDoctor(checks) + '\n')
 }
 else if (command === 'node') await runNode(rest)
 else if (CLIENT_COMMANDS.has(command)) await runClient([command, ...rest])
