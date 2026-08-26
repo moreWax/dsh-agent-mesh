@@ -21,6 +21,7 @@ npx @morewax/sam-mesh node join --bootstrap-token-path <file>
                                                  # pre-shared-token enrollment (no browser step);
                                                  # the hub operator mints the token out of band
 npx @morewax/sam-mesh node start | node stop     # daemon lifecycle (idempotent)
+npx @morewax/sam-mesh node binary                  # every usable sam-node, ★ = suggested
 
 npx @morewax/sam-mesh doctor                     # am I on the mesh? every failure prints its fix
 npx @morewax/sam-mesh status                     # mesh + node snapshot
@@ -28,6 +29,9 @@ npx @morewax/sam-mesh peers                      # connected peers: short ids + 
 npx @morewax/sam-mesh services [--filter <json>] # discover remote services
 npx @morewax/sam-mesh tools [--filter <json>]    # remote tool roster (note peer ids)
 npx @morewax/sam-mesh models                     # mesh inference models
+npx @morewax/sam-mesh fleet discover               # find fleets by service name
+npx @morewax/sam-mesh fleet join --fleet <name>    # pairing-based join (operator approves)
+npx @morewax/sam-mesh fleet approvals              # operator's pairing queue
 npx @morewax/sam-mesh call <peer> <tool> '{"arg": "value"}'
                                                  # peer id OR unique prefix; bare tool names
                                                  # auto-qualify to mcp://<service>/<tool>

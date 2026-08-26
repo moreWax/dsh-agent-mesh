@@ -52,17 +52,36 @@ row config (which stays as the composition base):
 ## Web UI
 
 The settings card shows the live mesh dashboard (services, tools, models,
-tasks, logs), offers approval-gated lifecycle actions, and includes the
-**Mesh node** section: install detection, daemon start/stop, and browser-based
-device-flow enrollment — the verification URL and code render in the card;
-you authorize in the browser and the machine joins the mesh. No terminal
-required on the machine being enrolled.
+tasks, logs), approval-gated lifecycle actions, a **mesh doctor** (every
+failure ships its fix command), and the complete zero-terminal onboarding
+loop:
+
+- **Mesh node** — binary picker (suggested: the bundled binary the package
+  carries), daemon start/stop, browser-based device-flow enrollment with
+  the verification URL + code rendered in the card
+- **Join a fleet** — discover fleets on the swarm, request to join, watch
+  the sealed invite land and provision itself (capability into the managed
+  store — agent calls work immediately, profile patch for restart posture)
+- **Fleet pairing** — the operator's approval queue: pending requests with
+  label/id/age, approve/reject in one click
+
+No terminal required on either side of onboarding.
 
 ## Security
 
 Discovery labels are routing hints. Calls that request labels rely on SAM's
 control-plane-signed Biscuit preflight before request bytes leave the node.
 Label matching is any-of; this package names it `requiredLabelsAnyOf`.
+
+The task service can run **capability-gated** (`capabilityCredentialRef`):
+discovery stays open, but `tools/call` requires the fleet capability
+(injected per call as `_capability`, compared in constant time, stripped
+before tool schemas run; missing and wrong get the same refusal). A
+configured-but-unresolvable ref fails CLOSED behind an ephemeral per-boot
+secret. Fleet membership is delivered by **pairing**: the invite is sealed
+to the joiner's ephemeral X25519 key (AES-256-GCM), and approval is always
+an explicit human action — in the card or the CLI.
+
 Mutations in the Web UI are approval-gated; destructive identity operations
 (reset) are deliberately not exposed.
 

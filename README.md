@@ -42,6 +42,86 @@ plugin (`dsh plugin --profile web add @morewax/dsh-agent-mesh`), open
 Settings → Agent Mesh, and use the **Mesh node** section — enrollment shows
 the verification URL and code right in the card.
 
+## Onboarding — completely in the UI
+
+Joining a fleet needs no terminal, no SSH, and no copied secrets — on either
+side:
+
+1. **New machine** — Settings → Agent Mesh: *Enroll this machine* (the
+   device-flow URL + code render in the card; approve in the browser)
+2. **Join a fleet → Discover fleets** — the swarm browser lists fleets by
+   service name with their providers → *Request to join*
+3. **Operator** — their own card's *Fleet pairing* section shows the request
+   (label, request id, age) → *Approve*
+4. The invite is **sealed to the joiner's ephemeral key** (X25519 →
+   AES-256-GCM — only that machine can open it), delivered through the mesh,
+   and provisioned in place: capability into dsh's managed credential store
+   (agent calls to fleet services work **immediately**), profile patch for
+   restart posture, CLI parity file. The card shows ✓ with provisioning
+   notes.
+
+The card also carries the **pairing approvals queue**, a **mesh doctor**
+(5s poll, every failure ships its fix command), and a **sam-node binary
+picker** (below). The CLI mirrors every step for terminals-only machines —
+see [docs/join-the-fleet.md](docs/join-the-fleet.md).
+
+## Security model
+
+- **Always encrypted**: every mesh transport is end-to-end noise-encrypted;
+  relays see ciphertext. Direct connections upgrade out of relays (DCUtR)
+  automatically — peers are pure dial-out, no open ports, no VPN.
+- **Discovery is public, execution is not.** Announcing a service on the
+  public hub publishes a phone-book entry (service name + peer id). Calling
+  a gated tool requires the fleet **capability** — a shared secret held only
+  by fleet members, injected per call, compared in constant time, stripped
+  before tool schemas see the arguments. Missing and wrong credentials get
+  the same refusal.
+- **Fail closed**: a configured-but-unresolvable capability ref gates the
+  service behind an ephemeral per-boot secret — every mesh call rejects —
+  and logs loudly. In-process callers bypass the gate (same trust domain).
+- **Pairing is the human gate**: pair request/poll are deliberately open
+  (unguessable 128-bit ids, sealed payloads, single-use delivery) — the
+  *approval* is what gates access, and approval is always an explicit human
+  action (card button or CLI), consistent with skill installs and service
+  registration.
+
+## The sam-node binary is included
+
+`dsh plugin add` is the *only* download. The official `google/sam` release
+binary for your platform ships inside `@morewax/sam-node-<os>-<arch>`
+(an optional dependency — you download only your platform, ~13MB gzipped),
+checksum-verified against the release's published SHA-256 sums at pack time
+and integrity-checked again at first execution. No installer script, no
+install-time network.
+
+Resolution: `SAM_NODE` env → **bundled** (lazy-extracted to
+`~/.config/sam-mesh/vendor/`, cached by content hash) → PATH. The settings
+card's *sam-node binary* dropdown lists every usable binary on the machine
+with the suggestion preselected (`Auto — bundled v…`); `sam-mesh node
+binary` prints the same list in a terminal, ★ = suggested.
+
+## CLI
+
+`sam-mesh` (or `npx @morewax/sam-mesh`) — action-routed, agent-friendly:
+
+| Command | What it does |
+| --- | --- |
+| `node status` / `start` / `stop` | node lifecycle (`status` reports binary source, enrollment hub, pid) |
+| `node join` | device-flow enrollment (URL + code); `--bootstrap-token-path` for pre-shared |
+| `node binary` | every usable sam-node on the machine, ★ = suggested |
+| `doctor` | live checks with a fix command per failure (hub detail included) |
+| `peers` | connected peers, short ids, announced services |
+| `services` / `tools` / `models` | mesh discovery |
+| `call <peer> <tool>` | invoke a mesh tool; bare tool names auto-qualify via discovery, unique peer prefixes expand |
+| `tail <peer> <task-id>` | stream a task to its terminal status |
+| `token mint [--ttl] [--ssh u@h]` | bootstrap token; `--ssh` prints the one-line handoff, `--qr` a QR |
+| `fleet discover` | find fleets on the hub by service name |
+| `fleet invite [--generate] [--ssh]` | sealed invite file for air-gapped / private-hub onboarding |
+| `fleet join --fleet <name>` | request-to-join via pairing (no files) |
+| `fleet join --invite <file>` | file-based join |
+| `fleet approvals [approve\|reject <id>]` | operator-side pairing queue |
+| `skill` | print the agent onboarding doc (also at [docs/agent-skill.md](docs/agent-skill.md)) |
+
 ## Install from source (until npm publish lands)
 
 ```bash
