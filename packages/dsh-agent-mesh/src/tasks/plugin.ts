@@ -16,6 +16,21 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
   const server=new TaskHttpServer(service,config); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<SamTaskRegistrationClient['register']>>|undefined
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)
-  if(config.registerWithSam!==false) registration=await registry.register(address,config.serviceName === undefined ? {} : {name:config.serviceName})
-  ctx.effect(()=>async()=>{if(registration) await registry.unregister(registration).catch(error=>ctx.logger.warn(`task service unregister failed: ${error instanceof Error?error.message:String(error)}`));await server.stop()},'agent-mesh-task-service.lifecycle')
+  let retryTimer:ReturnType<typeof setInterval>|undefined
+  if(config.registerWithSam!==false){
+    // Registration must never fail the boot: the node may be auto-starting
+    // concurrently (plugin row ordering is not a readiness contract), or simply
+    // absent. Attempt inline, then retry on a slow bounded loop; the service
+    // stays local-only until a retry lands.
+    const attempt=async():Promise<boolean>=>{
+      try{ registration=await registry.register(address,config.serviceName === undefined ? {} : {name:config.serviceName}); return true }
+      catch(error){ ctx.logger.warn(`task service SAM registration failed (will retry): ${error instanceof Error?error.message:String(error)}`); return false }
+    }
+    if(!await attempt()){
+      let attempts=0
+      retryTimer=setInterval(()=>{attempts+=1;void attempt().then(ok=>{if(ok){ctx.logger.info('task service registered with SAM after retry');clearInterval(retryTimer)}else if(attempts>=40){ctx.logger.warn('task service SAM registration gave up after 40 attempts; service stays local-only');clearInterval(retryTimer)}})},5_000)
+      retryTimer.unref?.()
+    }
+  }
+  ctx.effect(()=>async()=>{if(retryTimer)clearInterval(retryTimer);if(registration) await registry.unregister(registration).catch(error=>ctx.logger.warn(`task service unregister failed: ${error instanceof Error?error.message:String(error)}`));await server.stop()},'agent-mesh-task-service.lifecycle')
 }
