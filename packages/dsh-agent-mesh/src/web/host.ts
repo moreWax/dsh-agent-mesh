@@ -17,9 +17,7 @@ export interface ApprovedAction { approved: boolean; approvedBy?: string }
 export type ActionResult = { ok: true; message: string; value?: unknown } | { ok: false; error: string }
 
 export class AgentMeshWebHost extends TypertRemoteService {
-  private readonly nodes = new SamNodeManager()
-
-  constructor(ctx: Context, private readonly mesh: AgentMeshService) { super(ctx, "agentMeshWeb") }
+  constructor(ctx: Context, private readonly mesh: AgentMeshService, private readonly nodes = new SamNodeManager()) { super(ctx, "agentMeshWeb") }
 
   @Remote("snapshot")
   async snapshot(): Promise<MeshDashboardSnapshot> {
@@ -78,6 +76,11 @@ export class AgentMeshWebHost extends TypertRemoteService {
 
   @Remote("enrollmentStatus") async enrollmentStatus(sessionId: string): Promise<EnrollmentInfo | null> {
     return this.nodes.enrollment(sessionId)
+  }
+
+  /** The in-flight enrollment a card should surface on load (e.g. one auto-begun at boot). */
+  @Remote("activeEnrollment") async activeEnrollment(): Promise<EnrollmentInfo | null> {
+    return this.nodes.activeEnrollment()
   }
 
   /** Cancel an in-flight enrollment. Abort-only (never grants anything), so ungated. */

@@ -119,4 +119,15 @@ describe('SamNodeManager', () => {
     await session.done
     expect(session.state).toBe('cancelled')
   })
+
+  it('activeEnrollment surfaces the in-flight session and clears after resolution', async () => {
+    await mkdir(join(dir, 'data'), { recursive: true })
+    expect(manager.activeEnrollment()).toBeNull()
+    const session = manager.beginEnrollment({ controlPlane: 'https://cp.example' })
+    while (session.state === 'starting') await new Promise((r) => setTimeout(r, 50))
+    expect(manager.activeEnrollment()?.sessionId).toBe(session.sessionId)
+    await writeFile(join(dir, 'data', '.stub-approved'), '')
+    await session.done
+    expect(manager.activeEnrollment()).toBeNull()
+  })
 })

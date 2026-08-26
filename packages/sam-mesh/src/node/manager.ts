@@ -210,6 +210,15 @@ export class SamNodeManager {
     return this.sessions.get(sessionId)?.info() ?? null
   }
 
+  /** The most recent in-flight enrollment, if any — what a UI should surface on load. */
+  activeEnrollment(): EnrollmentInfo | null {
+    let latest: EnrollmentSession | null = null
+    for (const session of this.sessions.values()) {
+      if (session.state === 'starting' || session.state === 'awaiting_user') latest = session
+    }
+    return latest?.info() ?? null
+  }
+
   cancelEnrollment(sessionId: string): boolean {
     const session = this.sessions.get(sessionId)
     if (!session) return false

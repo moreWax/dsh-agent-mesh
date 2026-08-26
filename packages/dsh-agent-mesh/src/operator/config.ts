@@ -34,5 +34,17 @@ export function parseAgentMeshConfig(value: AgentMeshConfigInput | unknown = {})
   const configuredSocket = input.socketPath === undefined ? DEFAULT_SOCKET : input.socketPath as string | false
   const result: AgentMeshConfig = { socketPath: preferSocket ? socketPath(configuredSocket) : false, tcpUrl: url.toString().replace(/\/$/, ""), preferSocket, timeoutMs }
   if (input.nodeCredentialRef !== undefined) result.nodeCredentialRef = (input.nodeCredentialRef as string).trim()
+  if (input.autoStartNode !== undefined) {
+    if (typeof input.autoStartNode !== "boolean") throw new TypeError("autoStartNode must be boolean")
+    result.autoStartNode = input.autoStartNode
+  }
+  if (input.autoBeginEnrollment !== undefined) {
+    if (typeof input.autoBeginEnrollment !== "boolean") throw new TypeError("autoBeginEnrollment must be boolean")
+    result.autoBeginEnrollment = input.autoBeginEnrollment
+  }
+  if (input.nodeControlPlane !== undefined) {
+    if (typeof input.nodeControlPlane !== "string" || !input.nodeControlPlane.trim()) throw new TypeError("nodeControlPlane must be a non-empty string")
+    result.nodeControlPlane = (input.nodeControlPlane as string).trim()
+  }
   return Object.freeze(result)
 }
