@@ -205,8 +205,15 @@ export function MeshConfigCard({scope,api}:{scope:SettingsScope<MeshSettingsSect
   <input style={{...textInput,width:110}} type="number" value={v.timeoutMs??30000} onChange={e=>set("timeoutMs",Number(e.target.value)||30000)}/></div>
  </section> }
 
-export const name="agent-mesh-client"; export const inject=["slots","remote","remote.agentMeshWeb","settingsScope"] as const
-export async function apply(ctx:Context):Promise<()=>Promise<void>> { const dispose=await ctx.remote.$mount(remoteContribution);const api=createMeshWebApi(ctx);ctx.slots.inject("settings.section",()=>ctx.slots.register({name:"settings.section",id:"agent-mesh",order:70,label:"Agent Mesh"},()=> <MeshSettingsCard api={api}/>))
- const configScope=ctx.settingsScope.bind<MeshSettingsSection>({namespace:"agent-mesh"})
- ctx.slots.inject("settings.plugin.item",()=>ctx.slots.register({name:"settings.plugin.item",key:"agent-mesh"},()=> <MeshConfigCard scope={configScope} api={api}/>))
- return dispose }
+/** The OUTER plugin must NOT inject remote.agentMeshWeb: that namespace
+ * service only exists once our own apply() mounts the contribution — declaring
+ * it here deadlocks the fiber against itself (the harness separates mounters
+ * from consumers across packages; a single package splits via a child plugin). */
+export const name="agent-mesh-client"; export const inject=["slots","remote","settingsScope"] as const
+export async function apply(ctx:Context):Promise<()=>Promise<void>> { const dispose=await ctx.remote.$mount(remoteContribution)
+ const ui=ctx.plugin({name:"agent-mesh-ui",inject:["slots","remote","remote.agentMeshWeb","settingsScope"],apply:(uiCtx:Context)=>{
+  const api=createMeshWebApi(uiCtx);uiCtx.slots.inject("settings.section",()=>uiCtx.slots.register({name:"settings.section",id:"agent-mesh",order:70,label:"Agent Mesh"},()=> <MeshSettingsCard api={api}/>))
+  const configScope=uiCtx.settingsScope.bind<MeshSettingsSection>({namespace:"agent-mesh"})
+  uiCtx.slots.inject("settings.plugin.item",()=>uiCtx.slots.register({name:"settings.plugin.item",key:"agent-mesh"},()=> <MeshConfigCard scope={configScope} api={api}/>))
+ }})
+ return async()=>{ await ui.dispose(); await dispose() } }
