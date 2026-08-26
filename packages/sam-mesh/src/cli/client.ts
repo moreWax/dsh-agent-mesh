@@ -79,8 +79,26 @@ export async function runClient(args: string[]): Promise<void> {
       return
     }
     case "call": {
-      const [peer, tool, argsText] = rest
-      if (!peer || !tool) { stderr.write("call requires <peer> and <tool> — see the tools roster for peer ids\n"); exit(2) }
+      const [peer, rawTool, argsText] = rest
+      if (!peer || !rawTool) { stderr.write("call requires <peer> and <tool> — see the services roster for peer ids\n"); exit(2) }
+      // Auto-qualify a bare name against the target peer's discovered
+      // services: one match -> mcp://<service>/<tool>; several -> list them.
+      // Explicit URIs (contain '://') pass through untouched.
+      let tool = rawTool
+      if (!rawTool.includes("://")) {
+        const services = (await sam.discoverRemoteServices({ type: "mcp" })).filter(s => s.peer_id === peer)
+        const matches = services.filter(s => s.srv_name)
+        if (matches.length === 1) {
+          tool = `mcp://${matches[0]!.srv_name}/${rawTool}`
+          stderr.write(`(resolved ${rawTool} -> ${tool})\n`)
+        } else if (matches.length > 1) {
+          stderr.write(`ambiguous tool ${rawTool}: ${peer} exposes ${matches.map(m => `mcp://${m.srv_name}/`).join(", ")} — use the full URI form\n`)
+          exit(2)
+        } else {
+          stderr.write(`no remote service found for ${peer}; use the full URI form, e.g. mcp://<service>/${rawTool}\n`)
+          exit(2)
+        }
+      }
       print(await sam.callRemoteTool({ peer_id: peer, tool_name: tool, arguments: parseJson(argsText, {}) }))
       return
     }
