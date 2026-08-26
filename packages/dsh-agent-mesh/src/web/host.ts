@@ -2,6 +2,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { SamNodeManager, type EnrollmentInfo, type NodeStatus } from "@morewax/sam-mesh/node"
 import type { NodeOwnership } from "../index.js"
+import type { AgentMeshSettings } from "../settings.js"
 import type { Context } from "@deepseek-ai/cordis"
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol"
 import type { AgentMeshService } from "../index.js"
@@ -19,7 +20,7 @@ export type NodeStatusView = NodeStatus & { managedByDsh: boolean }
 export type ActionResult = { ok: true; message: string; value?: unknown } | { ok: false; error: string }
 
 export class AgentMeshWebHost extends TypertRemoteService {
-  constructor(ctx: Context, private readonly mesh: AgentMeshService, private readonly nodes = new SamNodeManager(), private readonly ownership: NodeOwnership = { startedByUs: false }) { super(ctx, "agentMeshWeb") }
+  constructor(ctx: Context, private readonly mesh: AgentMeshService, private readonly nodes = new SamNodeManager(), private readonly ownership: NodeOwnership = { startedByUs: false }, private readonly settings: () => AgentMeshSettings = () => ({ autoStartNode: true, autoBeginEnrollment: true, stopNodeOnExit: true, nodeControlPlane: "", nodeEnrollmentCredentialRef: "", tcpUrl: "", timeoutMs: 30_000, preferSocket: true, socketPath: false }), private readonly resolveEnrollmentToken: () => Promise<string | undefined> = async () => undefined, private readonly ensureNodeToken: () => Promise<string | undefined> = async () => undefined) { super(ctx, "agentMeshWeb") }
 
   @Remote("snapshot")
   async snapshot(): Promise<MeshDashboardSnapshot> {
@@ -49,7 +50,8 @@ export class AgentMeshWebHost extends TypertRemoteService {
 
   @Remote("startNode") async startNode(approval: ApprovedAction): Promise<ActionResult> {
     if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
-    const started = await this.nodes.start()
+    const apiToken = await this.ensureNodeToken()
+    const started = await this.nodes.start(apiToken !== undefined ? { apiToken } : {})
     // A start initiated from dsh (here or the boot auto-start) makes the node
     // dsh-managed: it stops when dsh stops. An already-running node stays external.
     if (started.ok && !started.message.includes("already running")) this.ownership.startedByUs = true
@@ -73,7 +75,12 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const status = await this.nodes.status()
     if (!status.installed) return { ok: false, error: "sam-node is not installed or not on PATH" }
     if (status.enrolled) return { ok: false, error: `This machine already has a node identity in ${status.dataDir}; reset stays a deliberate terminal operation.` }
-    const session = this.nodes.beginEnrollment(options ?? {})
+    // Live settings read: a control plane saved in Settings applies without a restart.
+    const configured = this.settings().nodeControlPlane
+    // A stored pre-shared token upgrades any enrollment (card or auto) to
+    // unattended bootstrap; without one the interactive device flow stands.
+    const bootstrapToken = await this.resolveEnrollmentToken()
+    const session = this.nodes.beginEnrollment({ ...(configured ? { controlPlane: configured } : {}), ...(bootstrapToken !== undefined ? { bootstrapToken } : {}), ...(options ?? {}) })
     // Give the child a brief moment to print the device-flow block so the
     // first card render usually already shows the URL and code.
     const deadline = Date.now() + 5_000

@@ -19,12 +19,24 @@ Waiting for authorization...
 function stubScript(): string {
   return `#!/bin/sh
 cmd="$1"; shift
+recorded="$*"
 data_dir="$HOME/.config/sam-mesh"
+bootstrap=""; token_path=""
 while [ $# -gt 0 ]; do
-  if [ "$1" = "--data-dir" ]; then data_dir="$2"; shift 2; else shift; fi
+  if [ "$1" = "--data-dir" ]; then data_dir="$2"; shift 2
+  elif [ "$1" = "--bootstrap-token-path" ]; then bootstrap="1"; token_path="$2"; shift 2
+  else shift; fi
 done
+mkdir -p "$data_dir"
 case "$cmd" in
   join)
+    echo "$recorded" > "$data_dir/.stub-join-args"
+    if [ "$bootstrap" = "1" ]; then
+      [ -f "$token_path" ] && [ "$(cat "$token_path")" = "sam-bt-test-token" ] || { echo "bad bootstrap token" >&2; exit 1; }
+      echo "Enrolling via HTTP at https://hub.example:8480"
+      echo "Join complete"
+      exit 0
+    fi
     cat <<'EOF'
 ${DEVICE_FLOW}EOF
     marker="$data_dir/.stub-approved"
@@ -76,6 +88,58 @@ describe('SamNodeManager', () => {
     const missing = new SamNodeManager({ samNode: join(dir, 'nope'), dataDir: join(dir, 'data') })
     const status = await missing.status()
     expect(status).toMatchObject({ installed: false, binaryPath: null, enrolled: false, running: false, pid: null })
+  })
+
+  it('treats a bare keypair store as unenrolled (the sam-node reset case)', async () => {
+    // reset clears the mesh binding but keeps the keypair, so agent.db exists
+    // with no control-plane URL inside. Existence alone must not read as enrolled.
+    await mkdir(join(dir, 'data'), { recursive: true })
+    await writeFile(join(dir, 'data', 'agent.db'), Buffer.alloc(65536))
+    const status = await manager.status()
+    expect(status.enrolled).toBe(false)
+  })
+
+  it('reads an agent.db carrying a control-plane URL as enrolled', async () => {
+    await mkdir(join(dir, 'data'), { recursive: true })
+    const store = Buffer.concat([Buffer.alloc(1024), Buffer.from('https://hub.example:8480'), Buffer.alloc(1024)])
+    await writeFile(join(dir, 'data', 'agent.db'), store)
+    const status = await manager.status()
+    expect(status.enrolled).toBe(true)
+  })
+
+  it('enrolls with a bootstrap token: right args, 0600 file, scrubbed on settle, no device flow', async () => {
+    const session = manager.beginEnrollment({ controlPlane: 'https://hub.example:8480', bootstrapToken: 'sam-bt-test-token' })
+    await session.done
+    const tokenPath = join(dir, 'data', '.enrollment-token')
+    // the join saw the token path (never an inline value) and no auth-mode
+    const args = await import('node:fs/promises').then(fs => fs.readFile(join(dir, 'data', '.stub-join-args'), 'utf8'))
+    expect(args).toContain('--bootstrap-token-path')
+    expect(args).not.toContain('sam-bt-test-token')
+    expect(args).not.toContain('--auth-mode')
+    // session completed as a bootstrap session without awaiting a user
+    const info = session.info()
+    expect(info).toMatchObject({ mode: 'bootstrap', state: 'complete', verificationUrl: null, userCode: null })
+    // token file scrubbed after settle
+    await expect(import('node:fs/promises').then(fs => fs.access(tokenPath))).rejects.toThrow()
+  })
+
+  it('reports a rejected bootstrap token as a failed session and still scrubs', async () => {
+    const session = manager.beginEnrollment({ bootstrapToken: 'sam-bt-WRONG' })
+    await session.done
+    const info = session.info()
+    expect(info.state).toBe('failed')
+    expect(info.error).toContain('bad bootstrap token')
+    await expect(import('node:fs/promises').then(fs => fs.access(join(dir, 'data', '.enrollment-token')))).rejects.toThrow()
+  })
+
+  it('start writes the managed api-token (0600) before daemonizing', async () => {
+    const started = await manager.start({ apiToken: 'managed-api-token-123' })
+    expect(started.ok).toBe(true)
+    const fs = await import('node:fs/promises')
+    const tokenPath = join(dir, 'data', 'api-token')
+    expect(await fs.readFile(tokenPath, 'utf8')).toBe('managed-api-token-123')
+    const mode = (await fs.stat(tokenPath)).mode & 0o777
+    expect(mode).toBe(0o600)
   })
 
   it('start is idempotent and stop terminates the daemon', async () => {

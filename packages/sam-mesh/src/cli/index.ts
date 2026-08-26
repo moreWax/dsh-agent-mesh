@@ -9,10 +9,12 @@
  *   sam-mesh node start                              start the node daemon (idempotent)
  *   sam-mesh node stop                               stop the node daemon (idempotent)
  *   sam-mesh node join [--control-plane <url>]       device-flow enrollment; prints URL + code
+ *   sam-mesh node join --bootstrap-token-path <file>   pre-shared-token enrollment (no browser)
  *
  * Env: SAM_SOCKET, SAM_TCP_URL (client), SAM_NODE (binary override),
  *      SAM_DATA_DIR (default ~/.config/sam-mesh), SAM_CONTROL_PLANE.
  */
+import { readFile } from 'node:fs/promises'
 import { stdout, stderr, exit, argv } from 'node:process'
 import { runClient } from './client.js'
 import { SamNodeManager, DEFAULT_CONTROL_PLANE } from '../node/index.js'
@@ -47,10 +49,18 @@ async function runNode(args: string[]): Promise<void> {
       let controlPlane = process.env.SAM_CONTROL_PLANE ?? DEFAULT_CONTROL_PLANE
       const flagIndex = rest.indexOf('--control-plane')
       if (flagIndex >= 0 && rest[flagIndex + 1]) controlPlane = rest[flagIndex + 1]!
+      const tokenIndex = rest.indexOf('--bootstrap-token-path')
+      const bootstrapTokenPath = tokenIndex >= 0 ? rest[tokenIndex + 1] : undefined
       const status = await nodes.status()
       if (status.enrolled) { stderr.write(`This node already has an identity in ${status.dataDir} (reset stays a deliberate terminal operation).\n`); exit(2) }
       if (!status.installed) { stderr.write('sam-node is not installed or not on PATH.\n'); exit(2) }
-      const session = nodes.beginEnrollment({ controlPlane })
+      // Bootstrap mode: read the token from its file (operator-placed, 0600)
+      // and hand the manager the VALUE — the manager owns the file it passes
+      // to sam-node from then on.
+      const bootstrapToken = bootstrapTokenPath !== undefined
+        ? (await readFile(bootstrapTokenPath!, 'utf8')).trim()
+        : undefined
+      const session = nodes.beginEnrollment({ controlPlane, ...(bootstrapToken !== undefined ? { bootstrapToken } : {}) })
       stderr.write(`Enrollment session ${session.sessionId} — waiting for the device flow...\n`)
       while (session.state === 'starting') await new Promise((r) => setTimeout(r, 200))
       if (session.state === 'awaiting_user') {

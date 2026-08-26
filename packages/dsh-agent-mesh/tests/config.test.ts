@@ -17,3 +17,14 @@ describe("parseAgentMeshConfig", () => {
     expect(() => parseAgentMeshConfig({ apiToken: "secret" } as never)).toThrow(/raw node tokens/)
   })
 })
+
+describe('enrollment credential reference', () => {
+  it('carries nodeEnrollmentCredentialRef through', () => {
+    expect(parseAgentMeshConfig({ nodeEnrollmentCredentialRef: 'SAM_MESH_BOOTSTRAP' }).nodeEnrollmentCredentialRef).toBe('SAM_MESH_BOOTSTRAP')
+    expect(parseAgentMeshConfig({}).nodeEnrollmentCredentialRef).toBeUndefined()
+  })
+
+  it('rejects raw bootstrap tokens in config — references only', () => {
+    expect(() => parseAgentMeshConfig({ bootstrapToken: 'sam-bt-abc' })).toThrow(/forbidden in config/)
+  })
+})

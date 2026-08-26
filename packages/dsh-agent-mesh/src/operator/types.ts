@@ -26,8 +26,8 @@ export interface SkillInstallPlan { command: CliCommandPlan; request: Readonly<S
 
 
 /** Parsed, transport-safe plugin configuration. */
-export interface AgentMeshConfig { socketPath: string | false; tcpUrl: string; preferSocket: boolean; nodeCredentialRef?: string; timeoutMs: number; autoStartNode?: boolean; autoBeginEnrollment?: boolean; nodeControlPlane?: string; stopNodeOnExit?: boolean }
-export interface AgentMeshConfigInput { socketPath?: string | false; tcpUrl?: string; preferSocket?: boolean; /** Reference only; secret values belong in ctx.credentials. */ nodeCredentialRef?: string; timeoutMs?: number; autoStartNode?: boolean; autoBeginEnrollment?: boolean; nodeControlPlane?: string; stopNodeOnExit?: boolean }
+export interface AgentMeshConfig { socketPath: string | false; tcpUrl: string; preferSocket: boolean; nodeCredentialRef?: string; /** Reference to the pre-shared enrollment token in ctx.credentials (bootstrap enrollment); unset = interactive device flow. */ nodeEnrollmentCredentialRef?: string; timeoutMs: number; autoStartNode?: boolean; autoBeginEnrollment?: boolean; nodeControlPlane?: string; stopNodeOnExit?: boolean }
+export interface AgentMeshConfigInput { socketPath?: string | false; tcpUrl?: string; preferSocket?: boolean; /** Reference only; secret values belong in ctx.credentials. */ nodeCredentialRef?: string; /** Reference only; pre-shared enrollment token lives in ctx.credentials. */ nodeEnrollmentCredentialRef?: string; timeoutMs?: number; autoStartNode?: boolean; autoBeginEnrollment?: boolean; nodeControlPlane?: string; stopNodeOnExit?: boolean }
 
 export interface ServiceRegistrationResponse { id?: string; service?: MeshService; [key: string]: unknown }
 export interface SetupOptions { createConfig?: boolean; startNode?: boolean }

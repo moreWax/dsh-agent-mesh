@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 import type { Context } from "@deepseek-ai/cordis"
 import type {} from "@deepseek-ai/dsh-api-gateway/client"
 import type {} from "@deepseek-ai/dsh-client-runtime/client"
 import type {} from "@deepseek-ai/dsh-client-ui-slots"
 import type {} from "@deepseek-ai/dsh-client-ui-settings/client"
+import type {} from "@deepseek-ai/dsh-client-ui-settings-plugins/client"
+import type { SettingsScope } from "@deepseek-ai/dsh-client-runtime/client"
 import remoteContribution from "../remote.js"
 import type { ActionResult, ApprovedAction, MeshDashboardSnapshot } from "../web/host.js"
 import type { ServiceRegistrationRequest, SkillInstallRequest } from "../operator/index.js"
@@ -51,7 +53,8 @@ function NodeSection({api,onChanged}:{api:MeshWebApi;onChanged:()=>Promise<void>
     {!status.enrolled&&status.installed&&!session&&<button style={button} onClick={()=>void begin()}>Enroll this machine (approved)</button>}
    </div>
    {session&&(session.state==="starting"||session.state==="awaiting_user")&&<div style={{border:"1px solid var(--border,#444)",borderRadius:8,padding:12}}>
-    {session.state==="starting"?<p>Contacting the control plane…</p>:<>
+    {session.mode==="bootstrap"?<p>Enrolling with the stored pre-shared token — no browser step needed…</p>
+     :session.state==="starting"?<p>Contacting the control plane…</p>:<>
      <p style={{margin:"0 0 6px"}}><b>Authorize this machine:</b></p>
      <p style={{margin:"0 0 6px"}}><a href={session.verificationUrl!} target="_blank" rel="noreferrer">{session.verificationUrl}</a></p>
      <p style={{margin:"0 0 10px",fontSize:18,letterSpacing:2}}><b>{session.userCode}</b></p>
@@ -63,5 +66,46 @@ function NodeSection({api,onChanged}:{api:MeshWebApi;onChanged:()=>Promise<void>
   </div></details> }
 
 function ActionForms({api,run}:{api:MeshWebApi;run:(f:()=>Promise<ActionResult>)=>Promise<void>}) { const [source,setSource]=useState("");const [name,setName]=useState("");const [protocol,setProtocol]=useState("http");const [endpoint,setEndpoint]=useState("");const a={approved:true,approvedBy:"DeepSeek Harness web user"};return <div style={{display:"grid",gap:8}}><label>Skill source <input value={source} onChange={e=>setSource(e.target.value)}/></label><button style={button} disabled={!source.trim()} onClick={()=>void run(()=>api.installSkill({source:source.trim()},a))}>Install skill (approved)</button><label>Service name <input value={name} onChange={e=>setName(e.target.value)}/></label><label>Protocol <input value={protocol} onChange={e=>setProtocol(e.target.value)}/></label><label>Endpoint <input value={endpoint} onChange={e=>setEndpoint(e.target.value)}/></label><button style={button} disabled={!name.trim()||!endpoint.trim()} onClick={()=>void run(()=>api.registerService({name:name.trim(),protocol:protocol.trim(),endpoint:endpoint.trim()},a))}>Register service (approved)</button></div> }
-export const name="agent-mesh-client"; export const inject=["slots","remote"] as const
-export async function apply(ctx:Context):Promise<()=>Promise<void>> { const dispose=await ctx.remote.$mount(remoteContribution);const api=createMeshWebApi(ctx);ctx.slots.inject("settings.section",()=>ctx.slots.register({name:"settings.section",id:"agent-mesh",order:70,label:"Agent Mesh"},()=> <MeshSettingsCard api={api}/>));return dispose }
+
+/** The agent-mesh settings section shape (mirrors the host namespace schema). */
+interface MeshSettingsSection { autoStartNode?: boolean; autoBeginEnrollment?: boolean; stopNodeOnExit?: boolean; nodeControlPlane?: string; nodeEnrollmentCredentialRef?: string; tcpUrl?: string; timeoutMs?: number; preferSocket?: boolean; socketPath?: string | false }
+
+const fieldRow:React.CSSProperties={display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"6px 0",borderBottom:"1px solid var(--border,#2a2a2a)"}
+const textInput:React.CSSProperties={width:220,padding:"4px 8px",borderRadius:6,border:"1px solid var(--border,#444)",background:"var(--bg,#111)",color:"inherit",fontSize:13}
+
+function Toggle({label,hint,value,onChange}:{label:string;hint:string;value:boolean;onChange:(v:boolean)=>void}) {
+ return <div style={fieldRow}><div><div>{label}</div><small style={{opacity:0.65}}>{hint}</small></div>
+  <input type="checkbox" checked={value} onChange={e=>onChange(e.target.checked)} style={{width:16,height:16}}/></div> }
+
+function TextField({label,hint,value,placeholder,onChange}:{label:string;hint:string;value:string;placeholder?:string;onChange:(v:string)=>void}) {
+ return <div style={fieldRow}><div><div>{label}</div><small style={{opacity:0.65}}>{hint}</small></div>
+  <input style={textInput} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)}/></div> }
+
+/** Settings → Plugins → agent-mesh: every plugin knob as a form field. Writes
+ * persist to settings.yaml through the settings scope; boot-time keys apply on
+ * the next dsh start, decision-time keys (stopNodeOnExit, control plane) live. */
+export function MeshConfigCard({scope}:{scope:SettingsScope<MeshSettingsSection>}) {
+ const snap=useSyncExternalStore(scope.subscribe,()=>scope.getSnapshot())
+ if(snap.status==="unavailable") return null
+ if(snap.status==="loading"||!snap.value) return <section style={box}><header><h3 style={{margin:0}}>Agent Mesh</h3><small>Loading settings…</small></header></section>
+ const v=snap.value
+ const set=(field:string,value:unknown)=>{ void scope.set(field,value) }
+ return <section style={box} data-testid="agent-mesh-config"><header><h3 style={{margin:0}}>Agent Mesh</h3>
+  <small>Node lifecycle keys marked restart apply on the next dsh start; the others apply immediately.{snap.writable?"":" (read-only: the settings document is memory-mode)"}</small></header>
+ <Toggle label="Auto-start node" hint="Start the enrolled sam-node when dsh boots (restart)" value={v.autoStartNode??true} onChange={x=>set("autoStartNode",x)}/>
+ <Toggle label="Auto-begin enrollment" hint="On unenrolled machines, prepare the browser enrollment prompt at boot (restart)" value={v.autoBeginEnrollment??true} onChange={x=>set("autoBeginEnrollment",x)}/>
+ <Toggle label="Stop node with dsh" hint="When dsh started the node, stop it on dsh shutdown (live)" value={v.stopNodeOnExit??true} onChange={x=>set("stopNodeOnExit",x)}/>
+ <TextField label="Control plane" hint="Mesh to join at enrollment (live)" value={v.nodeControlPlane??""} placeholder="https://hub.sam-mesh.dev" onChange={x=>set("nodeControlPlane",x)}/>
+ <TextField label="Enrollment credential ref" hint="Managed-store reference for pre-shared (unattended) enrollment; empty = browser flow (live)" value={v.nodeEnrollmentCredentialRef??""} placeholder="SAM_MESH_BOOTSTRAP" onChange={x=>set("nodeEnrollmentCredentialRef",x)}/>
+ <TextField label="Node TCP URL" hint="Local node fallback endpoint (restart)" value={v.tcpUrl??""} placeholder="http://127.0.0.1:8080" onChange={x=>set("tcpUrl",x)}/>
+ <TextField label="Node socket" hint="Unix socket path, or 'false' for TCP only (restart)" value={String(v.socketPath??"")} placeholder="~/.config/sam-mesh/sam.sock" onChange={x=>set("socketPath",x==="false"?false:x)}/>
+ <Toggle label="Prefer socket" hint="Use the unix socket before TCP (restart)" value={v.preferSocket??true} onChange={x=>set("preferSocket",x)}/>
+ <div style={fieldRow}><div><div>Request timeout (ms)</div><small style={{opacity:0.65}}>Mesh call timeout (restart)</small></div>
+  <input style={{...textInput,width:110}} type="number" value={v.timeoutMs??30000} onChange={e=>set("timeoutMs",Number(e.target.value)||30000)}/></div>
+ </section> }
+
+export const name="agent-mesh-client"; export const inject=["slots","remote","settingsScope"] as const
+export async function apply(ctx:Context):Promise<()=>Promise<void>> { const dispose=await ctx.remote.$mount(remoteContribution);const api=createMeshWebApi(ctx);ctx.slots.inject("settings.section",()=>ctx.slots.register({name:"settings.section",id:"agent-mesh",order:70,label:"Agent Mesh"},()=> <MeshSettingsCard api={api}/>))
+ const configScope=ctx.settingsScope.bind<MeshSettingsSection>({namespace:"agent-mesh"})
+ ctx.slots.inject("settings.plugin.item",()=>ctx.slots.register({name:"settings.plugin.item",key:"agent-mesh"},()=> <MeshConfigCard scope={configScope}/>))
+ return dispose }

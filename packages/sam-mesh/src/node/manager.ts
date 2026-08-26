@@ -8,7 +8,7 @@
  */
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { access, readFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -47,6 +47,8 @@ export interface EnrollmentInfo {
   sessionId: string
   state: EnrollmentState
   controlPlane: string
+  /** `device` = interactive OIDC browser flow; `bootstrap` = pre-shared token, no human step. */
+  mode: 'device' | 'bootstrap'
   verificationUrl: string | null
   userCode: string | null
   error: string | null
@@ -89,7 +91,7 @@ export class EnrollmentSession {
   private readonly child: ReturnType<typeof spawn>
   readonly done: Promise<void>
 
-  constructor(binary: string, args: string[], readonly controlPlane: string) {
+  constructor(binary: string, args: string[], readonly controlPlane: string, readonly mode: 'device' | 'bootstrap' = 'device', private readonly onSettle: () => Promise<void> | void = () => {}) {
     this.child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const onData = (chunk: Buffer) => {
       this.buffer += chunk.toString()
@@ -110,7 +112,9 @@ export class EnrollmentSession {
           this.state = 'failed'
           this.error = this.buffer.trim().split('\n').slice(-3).join(' ').slice(0, 400) || `join exited with code ${code}`
         }
-        resolve()
+        // Cleanup (credential-file scrub) is part of settling: `done` resolves
+        // only after it, so observers never race the residue.
+        void Promise.resolve(this.onSettle()).then(() => resolve(), () => resolve())
       })
     })
   }
@@ -123,7 +127,7 @@ export class EnrollmentSession {
 
   info(): EnrollmentInfo {
     return {
-      sessionId: this.sessionId, state: this.state, controlPlane: this.controlPlane,
+      sessionId: this.sessionId, state: this.state, controlPlane: this.controlPlane, mode: this.mode,
       verificationUrl: this.verificationUrl, userCode: this.userCode, error: this.error,
     }
   }
@@ -145,6 +149,23 @@ export class SamNodeManager {
   private get pidPath(): string { return join(this.dataDir, 'sam-node.pid') }
   private get identityPath(): string { return join(this.dataDir, 'agent.db') }
 
+  /**
+   * Enrollment detection. `sam-node reset` clears the mesh binding but keeps
+   * the keypair (PeerID unchanged), so agent.db EXISTING is not enough — an
+   * enrolled node persists its control-plane URL in the store (it must, to
+   * renew leases across restarts); a reset node contains no URL marker at
+   * all. The scan therefore looks for an `http` marker in the store bytes.
+   * Failure direction is benign: if sam-node ever changes its storage format
+   * this degrades to "unenrolled" (an unnecessary enrollment prompt, which
+   * sam-node itself rejects when the node is in fact enrolled), never to a
+   * silent dead mesh.
+   */
+  private async detectEnrolled(): Promise<boolean> {
+    let data: Buffer
+    try { data = await readFile(this.identityPath) } catch { return false }
+    return data.includes('http://') || data.includes('https://')
+  }
+
   async status(): Promise<NodeStatus> {
     const binaryPath = await this.resolveBinary()
     let pid: number | null = null
@@ -153,7 +174,7 @@ export class SamNodeManager {
       const parsed = Number(raw.trim())
       if (Number.isInteger(parsed) && pidAlive(parsed)) pid = parsed
     } catch { /* no pidfile */ }
-    const enrolled = await access(this.identityPath, constants.F_OK).then(() => true, () => false)
+    const enrolled = await this.detectEnrolled()
     const running = pid !== null || await socketAnswers(this.socketPath)
     return {
       installed: binaryPath !== null, binaryPath, enrolled, running, pid,
@@ -162,11 +183,24 @@ export class SamNodeManager {
   }
 
   /** Start the node daemon. Idempotent: a live node is reported, not restarted. */
-  async start(): Promise<ActionResult> {
+  /**
+   * Start the daemon. When `apiToken` is given, the manager first writes it to
+   * `<dataDir>/api-token` (0600) — the credential store is the single source
+   * for the local-channel credential, mirrored here so the node enforces it
+   * and file-based local clients keep working. Without it, the node's own
+   * token behavior is untouched.
+   */
+  async start(options: { apiToken?: string } = {}): Promise<ActionResult> {
     const before = await this.status()
     if (before.running) return { ok: true, message: `sam-node already running${before.pid ? ` (pid ${before.pid})` : ''}` }
     if (!before.installed) return { ok: false, error: 'sam-node is not installed or not on PATH' }
     try {
+      if (options.apiToken !== undefined) {
+        const tokenPath = join(this.dataDir, 'api-token')
+        await mkdir(this.dataDir, { recursive: true })
+        await writeFile(tokenPath, options.apiToken, { mode: 0o600 })
+        await chmod(tokenPath, 0o600)
+      }
       await execFileAsync(this.binary, ['run', '--daemonize', '--data-dir', this.dataDir], { timeout: 30_000 })
       return { ok: true, message: 'sam-node started' }
     } catch (error) {
@@ -193,17 +227,41 @@ export class SamNodeManager {
    * the browser, or fails/cancels. Requires an unenrolled node — joining an
    * enrolled node is rejected by sam-node itself.
    */
-  beginEnrollment(options: { controlPlane?: string; offlineAccess?: boolean } = {}): EnrollmentSession {
+  beginEnrollment(options: { controlPlane?: string; offlineAccess?: boolean; bootstrapToken?: string } = {}): EnrollmentSession {
     const controlPlane = options.controlPlane ?? this.controlPlane
-    const args = ['join', controlPlane, '--auth-mode', 'device', '--data-dir', this.dataDir]
-    if (options.offlineAccess !== false) args.push('--offline-access')
-    const session = new EnrollmentSession(this.binary, args, controlPlane)
+    let args: string[]
+    let mode: 'device' | 'bootstrap'
+    let tokenPath: string | null = null
+    if (options.bootstrapToken !== undefined) {
+      // Pre-shared-token enrollment: no OIDC, no browser. The token value
+      // transits only this process -> a 0600 file the manager owns ->
+      // --bootstrap-token-path (never the inline flag: argv is visible in ps).
+      // The file is scrubbed when the session settles, however it settles.
+      mode = 'bootstrap'
+      tokenPath = join(this.dataDir, '.enrollment-token')
+      args = ['join', controlPlane, '--bootstrap-token-path', tokenPath, '--data-dir', this.dataDir]
+    } else {
+      mode = 'device'
+      args = ['join', controlPlane, '--auth-mode', 'device', '--data-dir', this.dataDir]
+      if (options.offlineAccess !== false) args.push('--offline-access')
+    }
+    if (tokenPath !== null) this.writeTokenFile(tokenPath, options.bootstrapToken!)
+    const scrub = tokenPath !== null ? () => rm(tokenPath, { force: true }).catch(() => {}) : undefined
+    const session = new EnrollmentSession(this.binary, args, controlPlane, mode, scrub)
     this.sessions.set(session.sessionId, session)
     void session.done.finally(() => {
       // Completed sessions stay queryable for one sweep interval, then drop.
       setTimeout(() => this.sessions.delete(session.sessionId), 300_000).unref()
     })
     return session
+  }
+
+  /** Write a credential file the manager owns: parent dir + 0600, value never logged. */
+  private writeTokenFile(path: string, value: string): void {
+    void mkdir(this.dataDir, { recursive: true })
+      .then(() => writeFile(path, value, { mode: 0o600 }))
+      .then(() => chmod(path, 0o600))
+      .catch(() => { /* the join child fails on the missing file and the session reports it */ })
   }
 
   enrollment(sessionId: string): EnrollmentInfo | null {

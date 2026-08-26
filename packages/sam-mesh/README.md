@@ -10,6 +10,9 @@ join the mesh. Zero runtime dependencies.
 npx @morewax/sam-mesh node status                # installed / enrolled / running / pid
 npx @morewax/sam-mesh node join [--control-plane <url>]
                                                  # OIDC device-flow enrollment; prints URL + code
+npx @morewax/sam-mesh node join --bootstrap-token-path <file>
+                                                 # pre-shared-token enrollment (no browser step);
+                                                 # the hub operator mints the token out of band
 npx @morewax/sam-mesh node start | node stop     # daemon lifecycle (idempotent)
 
 npx @morewax/sam-mesh status                     # mesh + node snapshot
