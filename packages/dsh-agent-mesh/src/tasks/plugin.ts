@@ -7,13 +7,14 @@ import z from '@deepseek-ai/schemastery'
 import type { AgentMeshService } from '../index.js'
 import { InMemoryTaskStore, TaskService, type TaskExecutor } from './service.js'
 import { SQLiteTaskStore } from './sqlite.js'
+import { PairingStore } from './pairing.js'
 import { TaskHttpServer } from './http.js'
 import { SamTaskRegistrationClient } from './registration.js'
 export const name='agent-mesh-task-service'
 export const inject=['agentMesh','credentials']
-export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string }
+export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean }
 export const DEFAULT_TASK_DB = '~/.dsh/storages/agent-mesh-task-service/tasks.db'
-export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default('')}) as unknown as z<Config>
+export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default(''),pairing:z.boolean().default(true),pairControlPlane:z.string().default('https://hub.sam-mesh.dev'),pairAnnouncePrivate:z.boolean().default(false)}) as unknown as z<Config>
 declare module '@deepseek-ai/cordis' { interface Context { agentMeshTaskService: TaskService } }
 export const provide=['agentMeshTaskService']
 function resolveDbPath(value: string): string {
@@ -28,7 +29,6 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
   // Tasks survive dsh restarts by default: SQLite (WAL) under the harness
   // home. ':memory:' opts back into ephemeral behavior (tests).
   const store = new SQLiteTaskStore(resolveDbPath(config.dbPath ?? DEFAULT_TASK_DB))
-  const service=new TaskService(store,executor)
   // Capability gate (public-hub posture): when capabilityCredentialRef is
   // configured, mesh calls must present the fleet secret. A configured ref
   // that resolves to nothing fails CLOSED — an ephemeral per-boot secret no
@@ -44,6 +44,21 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
       ctx.logger.warn(`capability ref '${ref}' is configured but empty — mesh calls to the task service will be REJECTED until the credential is provisioned (fail-closed)`)
     }
   }
+  // Fleet pairing (public-hub onboarding): a machine that DISCOVERED this
+  // service in the swarm can request the capability — approval seals the
+  // invite to the requester's ephemeral key. Only meaningful with a gate:
+  // an open service has no secret to deliver.
+  const pairingEnabled = config.pairing !== false && capability !== undefined
+  const service=new TaskService(store,executor,{
+    ...(pairingEnabled ? {
+      pairing: new PairingStore(),
+      pairInvite: () => JSON.stringify({
+        version: 1, controlPlane: config.pairControlPlane ?? 'https://hub.sam-mesh.dev',
+        serviceName: config.serviceName ?? 'dsh-task-service', capability: capability ?? '',
+        announcePrivate: config.pairAnnouncePrivate ?? false, createdAt: new Date().toISOString(),
+      }),
+    } : {}),
+  })
   const server=new TaskHttpServer(service,{...config,...(capability!==undefined?{capability}:{})}); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<SamTaskRegistrationClient['register']>>|undefined
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)

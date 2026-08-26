@@ -1,43 +1,36 @@
 # Joining the fleet (any machine, anywhere)
 
-Two commands total. The joining machine needs the kit (clone + build until
-npm publish) and one invite file from any fleet machine.
+The fleet announces itself on the public mesh. A new machine discovers it,
+requests to pair, an operator approves, and the capability arrives sealed to
+the requester's ephemeral key — **no ssh, no files, no copied secrets**.
 
-## On any fleet machine (e.g. escha) — create the invite
-
-```bash
-cd ~/dsh-agent-mesh/packages/sam-mesh
-node lib/cli/index.mjs fleet invite --out ~/fleet-invite.json --ssh <user@new-machine>
-```
-
-Auto-detects the hub from the local node's live store and the capability
-from the dsh credentials. The invite is 0600 — it carries the fleet
-capability; move it by scp/ssh, never chat.
-
-## On the joining machine
+## New machine (two commands)
 
 ```bash
 git clone https://github.com/moreWax/dsh-agent-mesh && cd dsh-agent-mesh
 corepack enable && pnpm install && pnpm -r build
-node packages/sam-mesh/lib/cli/index.mjs fleet join --invite ~/fleet-invite.json
+alias sam-mesh='node packages/sam-mesh/lib/cli/index.mjs'
+
+sam-mesh node join --control-plane https://hub.sam-mesh.dev   # device flow, one browser approval
+sam-mesh fleet join --fleet morewax-dsh-task-service          # pairing request → waits for approval
 ```
 
-`fleet join` handles everything else interactively:
+(`fleet discover` browses fleets if you don't know the name.)
 
-1. **Hub mismatch** — enrolled on a different hub? It tells you which, and
-   requires typing `reset` before touching the identity (destructive stays
-   deliberate, but no longer *manual*)
-2. **Enrollment** — device flow (public hub: URL + code, one browser
-   approval) or bootstrap token (private hub invite: unattended)
-3. **Capability** — written to `~/.config/sam-mesh/fleet-capability` (0600,
-   auto-read by `call`/`tail`) AND merged into `~/.dsh/.credentials.yaml`
-   (never overwrites existing keys)
-4. **dsh profile patch** — written/merged into the profile's cordis.patch.yml
-   when dsh is present (conflicts hand back the exact block, never clobber)
-5. **Node start** — offered; dsh takes over ownership later if installed
-6. **Doctor epilogue** — ends with the same checks the Web UI shows
+## Operator (any fleet machine)
 
-## Full dsh peer (optional, after join)
+```bash
+sam-mesh fleet approvals                       # pending requests, with labels
+sam-mesh fleet approvals approve <requestId>   # seals + delivers the invite
+# or: fleet approvals reject <requestId>
+```
+
+The moment you approve, the joiner's poll returns the fleet invite — sealed
+so only their ephemeral key can open it — and `fleet join` finishes
+provisioning: capability file (0600, auto-used by `call`/`tail`), dsh
+credential merge, profile patch, done.
+
+## Full dsh peer (optional, after pairing)
 
 ```bash
 git clone https://github.com/deepseek-ai/deepseek-harness
@@ -46,14 +39,35 @@ node apps/cli/src/bin.ts --profile web \
   plugin add link:$HOME/dsh-agent-mesh/packages/dsh-agent-mesh
 ```
 
-Start dsh with `--profile web`: the plugin sees the enrolled node, starts
-it (dsh-managed), announces `morewax-dsh-task-service` with the capability
-gate, and the mesh card's Onboarding wizard goes green.
+Start dsh with `--profile web` — the plugin starts the node, announces the
+gated task service, and the mesh card's Onboarding wizard goes green.
+
+## Alternative: invite file (air-gapped / scripted / private hubs)
+
+```bash
+# operator:                        # joiner:
+sam-mesh fleet invite --out i.json  sam-mesh fleet join --invite i.json
+```
+
+Carries the same payload as a sealed pairing, as a 0600 file. Move it by
+whatever channel you trust. Private-hub invites can embed a bootstrap token
+for unattended enrollment.
+
+## Security model (why strangers lose)
+
+- Discovery is public by design: the swarm can see the fleet's phone-book
+  entry. Presence, never content.
+- `fleet_pair_request`/`poll` are ungated but powerless: request ids are
+  128-bit random, pending lists and approvals sit behind the capability.
+- The capability only ever travels sealed to an ephemeral X25519 key, over
+  an already end-to-end-encrypted channel, after a human approves.
+- Delivery is single-use; requests expire in 10 minutes; pending caps at 16.
 
 ## Verify (either machine)
 
 ```bash
-sam-mesh peers                                  # the other machine, short id
+sam-mesh doctor
+sam-mesh peers
 sam-mesh call <peer-prefix> task_submit '{"idempotencyKey":"x1","input":{"hi":"there"}}'
 sam-mesh tail <peer-prefix> <task-id>
 # stranger sim — expect "capability required" through the public relay:

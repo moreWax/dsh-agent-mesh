@@ -11,8 +11,15 @@ export const TASK_TOOL_SCHEMAS = Object.freeze({
   task_watch: { type: 'object', required: ['taskId'], properties: { taskId: { type: 'string', minLength: 1 }, cursor: { type: 'string' }, waitMs: { type: 'integer', minimum: 0 } }, additionalProperties: false },
   task_cancel: { type: 'object', required: ['taskId'], properties: { taskId: { type: 'string', minLength: 1 }, reason: { type: 'string' } }, additionalProperties: false },
   task_collect: { type: 'object', required: ['taskId'], properties: { taskId: { type: 'string', minLength: 1 }, deadline: { type: 'string', format: 'date-time' }, waitMs: { type: 'integer', minimum: 0 } }, additionalProperties: false },
+  fleet_pair_request: { type: 'object', required: ['requestId', 'publicKey'], properties: { requestId: { type: 'string', minLength: 16 }, publicKey: { type: 'string', minLength: 1 }, label: { type: 'string' } }, additionalProperties: false },
+  fleet_pair_poll: { type: 'object', required: ['requestId'], properties: { requestId: { type: 'string', minLength: 1 } }, additionalProperties: false },
+  fleet_pair_list: { type: 'object', properties: {}, additionalProperties: false },
+  fleet_pair_approve: { type: 'object', required: ['requestId'], properties: { requestId: { type: 'string', minLength: 1 }, approvedBy: { type: 'string' } }, additionalProperties: false },
+  fleet_pair_reject: { type: 'object', required: ['requestId'], properties: { requestId: { type: 'string', minLength: 1 } }, additionalProperties: false },
 } as const)
-const descriptions: Record<string, string> = { task_submit: 'Submit an idempotent durable task', task_get: 'Get a task snapshot', task_watch: 'Long-poll task events from a cursor', task_cancel: 'Cancel queued or running task execution', task_collect: 'Wait for a terminal task snapshot' }
+const descriptions: Record<string, string> = { task_submit: 'Submit an idempotent durable task', task_get: 'Get a task snapshot', task_watch: 'Long-poll task events from a cursor', task_cancel: 'Cancel queued or running task execution', task_collect: 'Wait for a terminal task snapshot',
+  fleet_pair_request: 'Request to join this fleet (ungated; sealed delivery after operator approval)', fleet_pair_poll: 'Poll a pair request (ungated; single-use once approved)',
+  fleet_pair_list: 'List pending fleet pair requests (capability-gated)', fleet_pair_approve: 'Approve a pair request — seals the fleet invite to the requester (capability-gated)', fleet_pair_reject: 'Reject a pending pair request (capability-gated)' }
 export interface TaskHttpServerOptions { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; shutdownTimeoutMs?: number
   /**
    * Fleet capability: when set, tools/call requests must carry it in
@@ -27,6 +34,9 @@ export interface TaskHttpServerOptions { host?: string; port?: number; path?: st
 export interface TaskHttpAddress { host: string; port: number; mcpUrl: string; healthUrl: string }
 function send(res: ServerResponse, status: number, body?: unknown, headers: Record<string,string> = {}): void { const data = body === undefined ? '' : JSON.stringify(body); res.writeHead(status, { ...(data ? { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(data)) } : {}), ...headers }); res.end(data) }
 async function body(req: IncomingMessage): Promise<unknown> { const chunks: Buffer[]=[]; let n=0; for await (const raw of req) { const c=Buffer.from(raw); n+=c.length; if(n>1024*1024) throw new Error('request body too large'); chunks.push(c) } return JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+/** Pairing bootstrap tools are ungated BY DESIGN — see tasks/pairing.ts. */
+const UNGATED_TOOLS = new Set(['fleet_pair_request', 'fleet_pair_poll'])
+
 function capabilityMatches(presented: string, expected: string): boolean {
   const a = Buffer.from(presented); const b = Buffer.from(expected)
   return a.length === b.length && a.length > 0 && timingSafeEqual(a, b)
@@ -50,7 +60,7 @@ export class TaskHttpServer {
       else if(msg.method==='tools/call') {
         const name=msg.params?.name; if(typeof name!=='string') throw new TaskProtocolError({code:'TASK_PROTOCOL_INVALID_REQUEST',message:'tool name is required'})
         const args = { ...((msg.params?.arguments ?? {}) as JsonObject) }
-        if (this.options.capability !== undefined) {
+        if (this.options.capability !== undefined && !UNGATED_TOOLS.has(name)) {
           const presented = typeof args._capability === 'string' ? args._capability : ''
           delete args._capability
           // Uniform rejection: missing and wrong capability are

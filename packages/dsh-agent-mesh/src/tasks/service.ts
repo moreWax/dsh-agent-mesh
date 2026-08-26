@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { PairingStore } from './pairing.js'
 import {
   isTerminalStatus, TaskProtocolError, type CancelTaskRequest, type CancelTaskResponse,
   type CollectTaskRequest, type CollectTaskResponse, type GetTaskRequest, type GetTaskResponse,
@@ -47,6 +48,10 @@ export interface TaskServiceOptions {
   id?: () => string
   /** Start locally executing newly admitted tasks. Disable when an external durable worker claims them. */
   autoStart?: boolean
+  /** Fleet pairing: when present, the service accepts fleet_pair_* tools. */
+  pairing?: PairingStore
+  /** Returns the fleet invite JSON sealed to approved joiners. Required when pairing is set. */
+  pairInvite?: () => string
 }
 
 type Waiter = { revision: number; resolve: () => void }
@@ -140,7 +145,12 @@ export class TaskService {
   private accepting = true
   private readonly idleWaiters = new Set<() => void>()
 
+  readonly pairing: PairingStore | undefined
+  readonly pairInvite: (() => string) | undefined
+
   constructor(readonly store: TaskStore, readonly executor: TaskExecutor, options: TaskServiceOptions = {}) {
+    this.pairing = options.pairing
+    this.pairInvite = options.pairInvite
     this.concurrency = options.concurrency ?? 4
     if (!Number.isSafeInteger(this.concurrency) || this.concurrency < 1) throw new RangeError('concurrency must be a positive safe integer')
     this.now = options.now ?? (() => new Date()); this.id = options.id ?? randomUUID; this.autoStart = options.autoStart ?? true
@@ -244,6 +254,42 @@ export class TaskService {
       case 'task_watch': return this.task_watch(arguments_ as unknown as WatchTaskRequest, options?.signal)
       case 'task_cancel': return this.task_cancel(arguments_ as unknown as CancelTaskRequest)
       case 'task_collect': return this.task_collect(arguments_ as unknown as CollectTaskRequest, options?.signal)
+      // Fleet pairing. fleet_pair_request/poll are UNGATED by design (the
+      // http layer exempts them): request ids are unguessable, delivery is
+      // sealed to the requester's ephemeral key, approval is the human gate.
+      // list/approve/reject stay behind the capability gate.
+      case 'fleet_pair_request': {
+        if (!this.pairing) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
+        const req = arguments_ as unknown as { requestId?: string; publicKey?: string; label?: string }
+        if (typeof req.requestId !== 'string' || req.requestId.length < 16) throw protocol('TASK_PROTOCOL_INVALID_REQUEST', 'requestId must be a random string of at least 16 chars', false)
+        if (typeof req.publicKey !== 'string' || !req.publicKey) throw protocol('TASK_PROTOCOL_INVALID_REQUEST', 'publicKey (x25519 jwk x) is required', false)
+        const accepted = this.pairing.request(req.requestId, req.publicKey, typeof req.label === 'string' ? req.label : 'unknown')
+        if (!accepted) throw protocol('TASK_PAIRING_BUSY', 'Too many pending pair requests — try later', true)
+        return { accepted: true }
+      }
+      case 'fleet_pair_poll': {
+        if (!this.pairing) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
+        const req = arguments_ as unknown as { requestId?: string }
+        if (typeof req.requestId !== 'string') throw protocol('TASK_PROTOCOL_INVALID_REQUEST', 'requestId is required', false)
+        return this.pairing.poll(req.requestId)
+      }
+      case 'fleet_pair_list': {
+        if (!this.pairing) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
+        return { pending: this.pairing.pending() }
+      }
+      case 'fleet_pair_approve': {
+        if (!this.pairing || !this.pairInvite) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
+        const req = arguments_ as unknown as { requestId?: string; approvedBy?: string }
+        if (typeof req.requestId !== 'string') throw protocol('TASK_PROTOCOL_INVALID_REQUEST', 'requestId is required', false)
+        const approved = this.pairing.approve(req.requestId, this.pairInvite(), req.approvedBy?.trim() || 'operator')
+        if (!approved) throw protocol('TASK_PAIRING_UNKNOWN', 'No pending request with that id (expired, approved, or unknown)', false)
+        return { approved: true, requestId: approved.requestId, label: approved.label }
+      }
+      case 'fleet_pair_reject': {
+        if (!this.pairing) throw protocol('TASK_PAIRING_DISABLED', 'This service does not accept fleet pairings', false)
+        const req = arguments_ as unknown as { requestId?: string }
+        return { rejected: typeof req.requestId === 'string' && this.pairing.reject(req.requestId) }
+      }
       default: throw protocol('TASK_TOOL_NOT_FOUND', `Unknown task tool: ${name}`)
     }
   }

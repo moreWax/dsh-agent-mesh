@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { stdin as inp, stdout, stderr, exit } from 'node:process'
 import { randomBytes } from 'node:crypto'
 import { SamNodeManager } from '../node/index.js'
-import { SamClient } from '../core/index.js'
+import { SamClient, generatePairKeys, open } from '../core/index.js'
 import {
   buildChecks, decodeFleetInvite, encodeFleetInvite, fleetJoinEnrollment,
   mergeCredentialRefs, mergeProfilePatch, renderDoctor, type FleetInvite,
@@ -81,6 +81,44 @@ async function invite(rest: string[]): Promise<void> {
   stdout.write(`\nOn the joining machine:\n  sam-mesh fleet join --invite ~/fleet-invite.json\n`)
 }
 
+// ─── shared provisioning ───────────────────────────────────────────────────
+
+/** Capability file + dsh credentials merge + profile patch. Shared by
+ * file-based join and pairing-based join. */
+async function provisionFleet(inviteData: FleetInvite, options: { dataDir: string; profile: string }): Promise<string[]> {
+  const notes: string[] = []
+  const capPath = join(options.dataDir, 'fleet-capability')
+  await writeFile(capPath, inviteData.capability, { mode: 0o600 })
+  await chmod(capPath, 0o600)
+  notes.push(`capability written to ${capPath} (0600 — call/tail read it automatically)`)
+  try {
+    const existing = await readFile(credentialsPath(), 'utf8').catch(() => null)
+    const merged = mergeCredentialRefs(existing, { MESH_TASK_CAPABILITY: inviteData.capability })
+    await mkdir(join(credentialsPath(), '..'), { recursive: true })
+    await writeFile(credentialsPath(), merged, { mode: 0o600 })
+    await chmod(credentialsPath(), 0o600)
+    notes.push(`capability merged into ${credentialsPath()}`)
+  } catch (error) { notes.push(`could not write dsh credentials: ${error instanceof Error ? error.message : String(error)}`) }
+
+  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  const patchPath = join(dshHome, 'profiles', options.profile, 'cordis.patch.yml')
+  try {
+    const existing = await readFile(patchPath, 'utf8').catch(() => null)
+    const hasDsh = existing !== null || await readFile(join(dshHome, '.credentials.yaml'), 'utf8').then(() => true).catch(() => false)
+    if (!hasDsh) notes.push('dsh not detected — skipped profile patch (install dsh later, then re-run)')
+    else {
+      const merged = mergeProfilePatch(existing, inviteData)
+      if ('conflict' in merged) notes.push(merged.conflict)
+      else {
+        await mkdir(join(patchPath, '..'), { recursive: true })
+        await writeFile(patchPath, merged.text)
+        notes.push(`profile patch written: ${patchPath}`)
+      }
+    }
+  } catch (error) { notes.push(`profile patch failed: ${error instanceof Error ? error.message : String(error)}`) }
+  return notes
+}
+
 // ─── fleet join ────────────────────────────────────────────────────────────
 
 async function joinFleet(rest: string[]): Promise<void> {
@@ -123,38 +161,7 @@ async function joinFleet(rest: string[]): Promise<void> {
     stdout.write('Enrolled.\n')
   }
 
-  // Capability, both consumption paths: standalone CLI file + dsh managed store.
-  const capPath = join(status.dataDir, 'fleet-capability')
-  await writeFile(capPath, inviteData.capability, { mode: 0o600 })
-  await chmod(capPath, 0o600)
-  let credsNote = ''
-  try {
-    const existing = await readFile(credentialsPath(), 'utf8').catch(() => null)
-    const merged = mergeCredentialRefs(existing, { MESH_TASK_CAPABILITY: inviteData.capability })
-    await mkdir(join(credentialsPath(), '..'), { recursive: true })
-    await writeFile(credentialsPath(), merged, { mode: 0o600 })
-    await chmod(credentialsPath(), 0o600)
-    credsNote = `capability merged into ${credentialsPath()}`
-  } catch (error) { credsNote = `could not write dsh credentials: ${error instanceof Error ? error.message : String(error)}` }
-
-  // dsh profile patch (only when dsh is present on this machine).
-  const profile = flag(rest, '--profile') ?? 'web'
-  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-  const patchPath = join(dshHome, 'profiles', profile, 'cordis.patch.yml')
-  let patchNote = 'dsh not detected — skipped profile patch (install dsh later, then re-run with --only-dsh)'
-  try {
-    const existing = await readFile(patchPath, 'utf8').catch(() => null)
-    const hasDsh = existing !== null || await readFile(join(dshHome, '.credentials.yaml'), 'utf8').then(() => true).catch(() => false)
-    if (hasDsh) {
-      const merged = mergeProfilePatch(existing, inviteData)
-      if ('conflict' in merged) patchNote = merged.conflict
-      else {
-        await mkdir(join(patchPath, '..'), { recursive: true })
-        await writeFile(patchPath, merged.text)
-        patchNote = `profile patch written: ${patchPath}`
-      }
-    }
-  } catch (error) { patchNote = `profile patch failed: ${error instanceof Error ? error.message : String(error)}` }
+  const notes = await provisionFleet(inviteData, { dataDir: status.dataDir, profile: flag(rest, '--profile') ?? 'web' })
 
   // Node start (offer) — dsh will own it later if installed (option A).
   if (await confirm('Start the mesh node now?', true)) {
@@ -162,7 +169,7 @@ async function joinFleet(rest: string[]): Promise<void> {
     stdout.write(started.ok ? `${started.message}\n` : `${started.error}\n`)
   }
 
-  stdout.write(`\n${credsNote}\n${patchNote}\n`)
+  stdout.write(`\n${notes.join('\n')}\n`)
   // Epilogue: doctor is the verdict.
   try {
     const fresh = await nodes.status()
@@ -183,10 +190,94 @@ async function joinFleet(rest: string[]): Promise<void> {
   } catch { /* doctor is best-effort */ }
 }
 
+// ─── discovery-based pairing join (the default path — no files, no ssh) ───
+
+async function discoverFleet(rest: string[]): Promise<void> {
+  const sam = new SamClient()
+  const services = await sam.discoverRemoteServices({ type: 'mcp' })
+  const nameFilter = flag(rest, '--name')
+  const fleets = services.filter(s => !nameFilter || s.srv_name === nameFilter)
+  stdout.write(JSON.stringify(fleets.map(s => ({ service: s.srv_name, peer: s.peer_id?.slice(0, 12) + '…', peer_id: s.peer_id })), null, 2) + '\n')
+  if (!nameFilter) stdout.write('\nJoin one: sam-mesh fleet join --fleet <service-name>\n')
+}
+
+async function pairJoin(rest: string[]): Promise<void> {
+  const fleetName = flag(rest, '--fleet')
+  if (!fleetName) { stderr.write('pair join requires --fleet <service-name> (see: sam-mesh fleet discover)\n'); exit(2) }
+  const sam = new SamClient()
+  const providers = (await sam.discoverRemoteServices({ type: 'mcp', name: fleetName }))
+    .filter(s => s.srv_name === fleetName)
+  if (providers.length === 0) { stderr.write(`No provider of '${fleetName}' found in the swarm. Check the name with: sam-mesh fleet discover\n`); exit(2) }
+  const peerFlag = flag(rest, '--peer')
+  const provider = peerFlag ? providers.find(p => p.peer_id === peerFlag || p.peer_id?.startsWith(peerFlag)) : providers[0]
+  if (!provider) { stderr.write(`No provider matching '${peerFlag}' — candidates: ${providers.map(p => p.peer_id).join(', ')}\n`); exit(2) }
+  const peer = provider.peer_id!
+
+  // Ephemeral identity for THIS pairing only: the invite comes back sealed
+  // to this key; nothing about it is reused.
+  stderr.write(`Requesting to join '${fleetName}' via ${peer.slice(0, 12)}…\n`)
+  const { randomBytes } = await import('node:crypto')
+  const keys = generatePairKeys()
+  const requestId = randomBytes(16).toString('hex')
+  const label = flag(rest, '--label') ?? `${process.env.USER ?? 'unknown'}@${(await import('node:os')).hostname()}`
+  const tool = (name: string, args: Record<string, unknown>) =>
+    sam.callRemoteTool({ peer_id: peer, tool_name: `mcp://${fleetName}/${name}`, arguments: args })
+  await tool('fleet_pair_request', { requestId, publicKey: keys.publicKeyX, label })
+  stdout.write(`Request sent as '${label}'. An operator must approve it (sam-mesh fleet approvals / approve).\nWaiting (Ctrl+C to abort)...\n`)
+  const deadline = Date.now() + 10 * 60_000
+  for (;;) {
+    if (Date.now() > deadline) { stderr.write('Timed out waiting for approval — re-run to try again.\n'); exit(1) }
+    await new Promise(r => setTimeout(r, 2000))
+    let poll: { state: string; sealed?: Parameters<typeof open>[0] }
+    try { poll = (await tool('fleet_pair_poll', { requestId })) as typeof poll } catch { continue }
+    if (poll.state === 'approved' && poll.sealed) {
+      const inviteJson = open(poll.sealed, keys.privateKey)
+      const decoded = decodeFleetInvite(inviteJson)
+      if ('error' in decoded) { stderr.write(`Approval carried an invalid invite: ${decoded.error}\n`); exit(1) }
+      stdout.write('Approved — invite received (sealed to this pairing).\n')
+      const nodes = new SamNodeManager({ controlPlane: decoded.controlPlane, announcePrivate: decoded.announcePrivate })
+      const status = await nodes.status()
+      const notes = await provisionFleet(decoded, { dataDir: status.dataDir, profile: flag(rest, '--profile') ?? 'web' })
+      stdout.write(notes.join('\n') + '\n')
+      stdout.write(`\nYou hold the '${fleetName}' capability. Try: sam-mesh peers | sam-mesh call <peer-prefix> task_get '{"taskId":"…"}'\n`)
+      return
+    }
+    if (poll.state === 'unknown') { stderr.write('Request expired or was rejected — re-run to try again.\n'); exit(1) }
+  }
+}
+
+async function approvals(rest: string[]): Promise<void> {
+  const fleetName = flag(rest, '--fleet') ?? 'morewax-dsh-task-service'
+  const peerArg = flag(rest, '--peer')
+  const sam = new SamClient()
+  const providers = (await sam.discoverRemoteServices({ type: 'mcp', name: fleetName })).filter(s => s.srv_name === fleetName)
+  const provider = peerArg ? providers.find(p => p.peer_id === peerArg || p.peer_id?.startsWith(peerArg)) : providers[0]
+  if (!provider?.peer_id) { stderr.write(`No provider of '${fleetName}' found.\n`); exit(2) }
+  const { readFileSync } = await import('node:fs')
+  let capability = process.env.SAM_MESH_CAPABILITY
+  if (!capability) try { capability = readFileSync(join(homedir(), '.config', 'sam-mesh', 'fleet-capability'), 'utf8').trim() } catch { capability = undefined }
+  const call = (name: string, args: Record<string, unknown>) =>
+    sam.callRemoteTool({ peer_id: provider.peer_id!, tool_name: `mcp://${fleetName}/${name}`, arguments: { ...args, ...(capability ? { _capability: capability } : {}) } })
+  const sub = rest[0]
+  if (sub === 'approve' || sub === 'reject') {
+    const requestId = rest[1]
+    if (!requestId) { stderr.write(`fleet approvals ${sub} requires a requestId\n`); exit(2) }
+    const result = await call(`fleet_pair_${sub}`, { requestId, ...(sub === 'approve' ? { approvedBy: process.env.USER ?? 'operator' } : {}) })
+    stdout.write(JSON.stringify(result) + '\n')
+    return
+  }
+  stdout.write(JSON.stringify(await call('fleet_pair_list', {}), null, 2) + '\n')
+}
+
 export async function runFleet(args: string[]): Promise<void> {
   const [sub, ...rest] = args
   if (sub === 'invite') return invite(rest)
-  if (sub === 'join') return joinFleet(rest)
+  if (sub === 'discover') return discoverFleet(rest)
+  if (sub === 'approvals') return approvals(rest)
+  if (sub === 'join') {
+    if (rest.includes('--fleet')) return pairJoin(rest)
+    return joinFleet(rest)
+  }
   stderr.write(`Usage: sam-mesh fleet <invite|join>
 
   fleet invite [--control-plane <url>] [--service-name <name>]
