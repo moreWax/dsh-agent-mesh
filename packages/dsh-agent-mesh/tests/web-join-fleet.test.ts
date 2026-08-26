@@ -19,7 +19,7 @@ describe('fleet join from the card (host-owned session)', () => {
     const { host } = hostWith({ discoverRemoteServices: async () => [
       { srv_name: 'fleet-tasks', peer_id: 'peer-aaa' }, { srv_name: 'fleet-tasks', peer_id: 'peer-bbb' }, { srv_name: 'other', peer_id: 'peer-ccc' },
     ] })
-    const fleets = await host.fleetDiscover()
+    const { fleets } = await host.fleetDiscover()
     expect(fleets).toContainEqual({ name: 'fleet-tasks', providers: 2, peerIds: ['peer-aaa', 'peer-bbb'] })
     expect(fleets).toContainEqual({ name: 'other', providers: 1, peerIds: ['peer-ccc'] })
   })

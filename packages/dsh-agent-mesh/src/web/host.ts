@@ -161,15 +161,26 @@ export class AgentMeshWebHost extends TypertRemoteService {
 
   private readonly pairSessions = new Map<string, { fleet: string; requestId: string; state: "waiting" | "complete" | "failed"; error?: string; notes?: string[]; privateKey: import("node:crypto").KeyObject; timer: ReturnType<typeof setInterval> }>()
 
-  /** Browse fleets in the swarm: service names with provider counts. Ungated read. */
-  @Remote("fleetDiscover") async fleetDiscover(): Promise<{ name: string; providers: number; peerIds: string[] }[]> {
+  /** Browse fleets in the swarm: service names with provider counts. Ungated
+   * read. Carries the LOCAL node's posture so the card can render guidance
+   * when the list is empty — an unenrolled node or one enrolled on a
+   * DIFFERENT hub (e.g. a stale private-hub identity) sees an empty swarm
+   * here, and "No fleets visible" alone never says why. */
+  @Remote("fleetDiscover") async fleetDiscover(): Promise<{
+    fleets: { name: string; providers: number; peerIds: string[] }[]
+    node: { running: boolean; enrolled: boolean; enrolledHub: string | null }
+  }> {
     const services = await this.mesh.core.discoverRemoteServices({ type: "mcp" })
     const byName = new Map<string, string[]>()
     for (const s of services) {
       if (typeof s.srv_name !== "string" || typeof s.peer_id !== "string" || !s.srv_name || !s.peer_id) continue
       byName.set(s.srv_name, [...(byName.get(s.srv_name) ?? []), s.peer_id])
     }
-    return [...byName.entries()].map(([name, peerIds]) => ({ name, providers: peerIds.length, peerIds }))
+    const status = await this.nodes.status()
+    return {
+      fleets: [...byName.entries()].map(([name, peerIds]) => ({ name, providers: peerIds.length, peerIds })),
+      node: { running: status.running, enrolled: status.enrolled, enrolledHub: status.enrolledHub },
+    }
   }
 
   /**
