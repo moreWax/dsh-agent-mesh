@@ -8,6 +8,52 @@ SAM-native capability mesh for DeepSeek Harness. One package, modular subpaths:
 - `./tasks` — durable remote task vocabulary and orchestration helpers
 - `./operator` — node diagnostics and human-approved lifecycle plans
 
+## Two planes: what the mesh carries, and what it does not
+
+This package works on the **agent plane**: capabilities — MCP tools, inference
+models, durable tasks — travel between enrolled mesh nodes. That plane needs
+no SSH, no exposed service ports, and no VPN: `sam-node` supplies direct
+QUIC/TCP, NAT traversal, hole punching, DHT discovery and authenticated
+circuit relays, with Biscuit-authorized calls.
+
+The **human plane** is different by design. Web UIs — including the dsh Web
+UI and this plugin's own operator card — are served to *browsers*, and a
+browser is not a mesh node: it cannot enroll, hold mesh identity, or speak
+mesh protocols. The mesh therefore does not, and will not, carry the Web UI.
+To reach a dsh Web UI from another machine, use an ops-layer answer:
+`tailscale serve`, an authenticated reverse proxy, or an SSH tunnel.
+
+## Using the mesh from another machine (the client story)
+
+There is no separate client application to install from us — the client is
+`sam-node` plus whatever you already use:
+
+1. **Install and enroll `sam-node`** on the laptop/peer (device-flow
+   enrollment; `dsh-agent-mesh init --join` plans it, or `sam-node enroll`
+   directly). Enrollment is what grants the machine mesh identity — firewalls
+   and NAT do not matter after that.
+2. **Consume the mesh** with any of:
+   - **dsh + this plugin** on the laptop — the full integrated experience:
+     remote tools appear as dsh tools, mesh models join the LLM roster, the
+     operator card works exactly as on the server.
+   - **This package's standalone CLI** — no dsh required; talks to the local
+     node socket directly:
+
+     ```bash
+     npx @morewax/dsh-agent-mesh status     # mesh + node snapshot
+     npx @morewax/dsh-agent-mesh tools      # remote tool roster (note peer ids)
+     npx @morewax/dsh-agent-mesh models     # mesh inference models
+     npx @morewax/dsh-agent-mesh call <peer> <tool> '{"arg": "value"}'
+     ```
+
+   - **Any MCP host** (Claude Code, Cursor, …) pointed at the local node's
+     MCP endpoint — the mesh meta-tools (`find_remote_tools`,
+     `call_remote_tool`, …) are plain MCP tools.
+
+Everything reachable that way — including the task service your server-side
+dsh publishes — travels the capability plane: no inbound ports opened on
+either machine.
+
 ## Connectivity
 
 No SSH, mosh, or Tailscale is required. `sam-node` supplies direct QUIC/TCP,
