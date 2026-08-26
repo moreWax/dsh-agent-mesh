@@ -46,5 +46,9 @@ export function parseAgentMeshConfig(value: AgentMeshConfigInput | unknown = {})
     if (typeof input.nodeControlPlane !== "string" || !input.nodeControlPlane.trim()) throw new TypeError("nodeControlPlane must be a non-empty string")
     result.nodeControlPlane = (input.nodeControlPlane as string).trim()
   }
+  if (input.stopNodeOnExit !== undefined) {
+    if (typeof input.stopNodeOnExit !== "boolean") throw new TypeError("stopNodeOnExit must be boolean")
+    result.stopNodeOnExit = input.stopNodeOnExit
+  }
   return Object.freeze(result)
 }

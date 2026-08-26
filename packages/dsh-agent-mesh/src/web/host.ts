@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { SamNodeManager, type EnrollmentInfo, type NodeStatus } from "@morewax/sam-mesh/node"
+import type { NodeOwnership } from "../index.js"
 import type { Context } from "@deepseek-ai/cordis"
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol"
 import type { AgentMeshService } from "../index.js"
@@ -14,10 +15,11 @@ export interface MeshDashboardSnapshot {
   failures: { probe: string; message: string }[]; capturedAt: string
 }
 export interface ApprovedAction { approved: boolean; approvedBy?: string }
+export type NodeStatusView = NodeStatus & { managedByDsh: boolean }
 export type ActionResult = { ok: true; message: string; value?: unknown } | { ok: false; error: string }
 
 export class AgentMeshWebHost extends TypertRemoteService {
-  constructor(ctx: Context, private readonly mesh: AgentMeshService, private readonly nodes = new SamNodeManager()) { super(ctx, "agentMeshWeb") }
+  constructor(ctx: Context, private readonly mesh: AgentMeshService, private readonly nodes = new SamNodeManager(), private readonly ownership: NodeOwnership = { startedByUs: false }) { super(ctx, "agentMeshWeb") }
 
   @Remote("snapshot")
   async snapshot(): Promise<MeshDashboardSnapshot> {
@@ -40,11 +42,18 @@ export class AgentMeshWebHost extends TypertRemoteService {
   }
 
   @Remote("check") async check(): Promise<MeshDashboardSnapshot> { return this.snapshot() }
-  @Remote("nodeStatus") async nodeStatus(): Promise<NodeStatus> { return this.nodes.status() }
+  /** Node status plus lifecycle ownership: managedByDsh means quitting dsh stops the node. */
+  @Remote("nodeStatus") async nodeStatus(): Promise<NodeStatusView> {
+    return { ...await this.nodes.status(), managedByDsh: this.ownership.startedByUs }
+  }
 
   @Remote("startNode") async startNode(approval: ApprovedAction): Promise<ActionResult> {
     if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
-    return this.nodes.start()
+    const started = await this.nodes.start()
+    // A start initiated from dsh (here or the boot auto-start) makes the node
+    // dsh-managed: it stops when dsh stops. An already-running node stays external.
+    if (started.ok && !started.message.includes("already running")) this.ownership.startedByUs = true
+    return started
   }
 
   @Remote("stopNode") async stopNode(approval: ApprovedAction): Promise<ActionResult> {

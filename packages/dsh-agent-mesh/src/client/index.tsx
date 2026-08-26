@@ -7,8 +7,9 @@ import type {} from "@deepseek-ai/dsh-client-ui-settings/client"
 import remoteContribution from "../remote.js"
 import type { ActionResult, ApprovedAction, MeshDashboardSnapshot } from "../web/host.js"
 import type { ServiceRegistrationRequest, SkillInstallRequest } from "../operator/index.js"
-import type { EnrollmentInfo, NodeStatus } from "@morewax/sam-mesh/node"
-export interface MeshWebApi { snapshot():Promise<MeshDashboardSnapshot>; check():Promise<MeshDashboardSnapshot>; startNode(a:ApprovedAction):Promise<ActionResult>; installSkill(r:SkillInstallRequest,a:ApprovedAction):Promise<ActionResult>; registerService(r:ServiceRegistrationRequest,a:ApprovedAction):Promise<ActionResult>; deviceFlowInstructions():Promise<string[]>; nodeStatus():Promise<NodeStatus>; stopNode(a:ApprovedAction):Promise<ActionResult>; beginEnrollment(a:ApprovedAction,o?:{controlPlane?:string}):Promise<EnrollmentInfo|ActionResult>; enrollmentStatus(id:string):Promise<EnrollmentInfo|null>; activeEnrollment():Promise<EnrollmentInfo|null>; cancelEnrollment(id:string):Promise<ActionResult> }
+import type { EnrollmentInfo } from "@morewax/sam-mesh/node"
+import type { NodeStatusView } from "../web/host.js"
+export interface MeshWebApi { snapshot():Promise<MeshDashboardSnapshot>; check():Promise<MeshDashboardSnapshot>; startNode(a:ApprovedAction):Promise<ActionResult>; installSkill(r:SkillInstallRequest,a:ApprovedAction):Promise<ActionResult>; registerService(r:ServiceRegistrationRequest,a:ApprovedAction):Promise<ActionResult>; deviceFlowInstructions():Promise<string[]>; nodeStatus():Promise<NodeStatusView>; stopNode(a:ApprovedAction):Promise<ActionResult>; beginEnrollment(a:ApprovedAction,o?:{controlPlane?:string}):Promise<EnrollmentInfo|ActionResult>; enrollmentStatus(id:string):Promise<EnrollmentInfo|null>; activeEnrollment():Promise<EnrollmentInfo|null>; cancelEnrollment(id:string):Promise<ActionResult> }
 function unwrap<T>(r:{ok:true;value:T}|{ok:false;error:{message:string}}):T { if(!r.ok) throw new Error(r.error.message); return r.value }
 export function createMeshWebApi(ctx:Context):MeshWebApi { const r=ctx.remote.agentMeshWeb; return {snapshot:async()=>unwrap(await r.snapshot()),check:async()=>unwrap(await r.check()),startNode:async a=>unwrap(await r.startNode(a)),installSkill:async(q,a)=>unwrap(await r.installSkill(q,a)),registerService:async(q,a)=>unwrap(await r.registerService(q,a)),deviceFlowInstructions:async()=>unwrap(await r.deviceFlowInstructions()),nodeStatus:async()=>unwrap(await r.nodeStatus()),stopNode:async a=>unwrap(await r.stopNode(a)),beginEnrollment:async(a,o)=>unwrap(await r.beginEnrollment(a,o)),enrollmentStatus:async id=>unwrap(await r.enrollmentStatus(id)),activeEnrollment:async()=>unwrap(await r.activeEnrollment()),cancelEnrollment:async id=>unwrap(await r.cancelEnrollment(id))} }
 const box:React.CSSProperties={border:"1px solid var(--border,#444)",borderRadius:10,padding:16,display:"grid",gap:12}; const button:React.CSSProperties={padding:"7px 12px",borderRadius:6,cursor:"pointer"};
@@ -27,7 +28,7 @@ function isActionResult(v:EnrollmentInfo|ActionResult):v is ActionResult { retur
 /** Mesh node kit: bring THIS machine onto the mesh — install check, daemon
  * lifecycle, and browser-based device-flow enrollment, all from the card. */
 function NodeSection({api,onChanged}:{api:MeshWebApi;onChanged:()=>Promise<void>}) {
- const [status,setStatus]=useState<NodeStatus>(); const [session,setSession]=useState<EnrollmentInfo|null>(null)
+ const [status,setStatus]=useState<NodeStatusView>(); const [session,setSession]=useState<EnrollmentInfo|null>(null)
  const [note,setNote]=useState("")
  const refresh=useCallback(async()=>{ setStatus(await api.nodeStatus()) },[api])
  useEffect(()=>{ void refresh() },[refresh])
@@ -42,6 +43,7 @@ function NodeSection({api,onChanged}:{api:MeshWebApi;onChanged:()=>Promise<void>
  if(!status) return null
  return <details open={!status.enrolled}><summary>Mesh node ({status.running?"running":status.enrolled?"enrolled, stopped":"not enrolled"})</summary>
   <div style={{display:"grid",gap:8,marginTop:8}}>
+   <p style={{margin:0,opacity:0.75}}>{status.running?(status.managedByDsh?"Started by dsh — stops automatically when dsh stops.":"Running independently of dsh — use Stop node to shut it down."):status.enrolled?"Stopped — Start node brings it up (dsh-managed).":"Not enrolled."}</p>
    <dl style={{margin:0}}><dt>Binary</dt><dd>{status.installed?status.binaryPath:"sam-node not found on PATH"}</dd><dt>Data dir</dt><dd>{status.dataDir}</dd>{status.pid!==null&&<><dt>PID</dt><dd>{status.pid}</dd></>}</dl>
    <div>
     {!status.running&&status.enrolled&&<button style={button} onClick={()=>void act(()=>api.startNode(approve()))}>Start node (approved)</button>}{" "}

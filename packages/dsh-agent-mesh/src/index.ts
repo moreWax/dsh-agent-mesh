@@ -27,6 +27,8 @@ export const Config: z<Config> = z.object({
   autoBeginEnrollment: z.boolean().default(true),
   /** Control plane for enrollment; defaults to the manager's (https://hub.sam-mesh.dev). */
   nodeControlPlane: z.string(),
+  /** Stop the node when dsh shuts down — but only if dsh started it. Default true. */
+  stopNodeOnExit: z.boolean().default(true),
 }) as unknown as z<Config>
 
 export interface AgentMeshService { core: SamClient; tools: SamToolClient; inference: SamInferenceClient; operator: SamOperator }
@@ -55,18 +57,23 @@ function dataDirOf(socketPath: string | false | undefined): string | undefined {
  * human authorizing in the browser. Never throws the host down: every
  * failure degrades to a warning.
  */
-async function autoNode(nodes: SamNodeManager, config: { autoStartNode?: boolean; autoBeginEnrollment?: boolean; nodeControlPlane?: string }, log: (line: string) => void): Promise<void> {
+export interface AutoNodeOutcome { started: boolean; enrollmentSessionId: string | null }
+
+async function autoNode(nodes: SamNodeManager, config: { autoStartNode?: boolean; autoBeginEnrollment?: boolean; nodeControlPlane?: string }, log: (line: string) => void): Promise<AutoNodeOutcome> {
   const status = await nodes.status()
-  if (!status.installed) { log(`sam-node not installed; mesh features stay degraded until it is (node kit: npx @morewax/sam-mesh node status)`) ; return }
+  const outcome: AutoNodeOutcome = { started: false, enrollmentSessionId: null }
+  if (!status.installed) { log(`sam-node not installed; mesh features stay degraded until it is (node kit: npx @morewax/sam-mesh node status)`) ; return outcome }
   if (status.enrolled && !status.running && config.autoStartNode !== false) {
     const started = await nodes.start()
-    if (started.ok) log(`sam-node auto-started: ${started.message}`)
+    if (started.ok) { outcome.started = true; log(`sam-node auto-started: ${started.message}`) }
     else log(`sam-node auto-start failed: ${started.error}`)
   }
   if (!status.enrolled && config.autoBeginEnrollment !== false) {
     const session = nodes.beginEnrollment(config.nodeControlPlane ? { controlPlane: config.nodeControlPlane } : {})
+    outcome.enrollmentSessionId = session.sessionId
     log(`machine not enrolled: enrollment session ${session.sessionId} begun — authorize in the browser (Settings → Agent Mesh → Mesh node)`)
   }
+  return outcome
 }
 
 export function apply(ctx: Context, input: Config): void {
@@ -80,10 +87,23 @@ export function apply(ctx: Context, input: Config): void {
   ctx.provide("agentMesh", service)
   const dir = dataDirOf(config.socketPath)
   const nodes = new SamNodeManager(dir ? { dataDir: dir } : {})
-  new AgentMeshWebHost(ctx, service, nodes)
+  const ownership: NodeOwnership = { startedByUs: false }
+  new AgentMeshWebHost(ctx, service, nodes, ownership)
   ctx.provide("agentMeshStatus", new CordisMeshStatus(operator))
   void autoNode(nodes, config, (line) => ctx.logger("agent-mesh").info(line))
+    .then((outcome) => { ownership.startedByUs = outcome.started })
+  // Option A: dsh owns what it starts. A node that was already running when
+  // dsh booted is external and is left alone on shutdown.
+  ctx.effect(() => async () => {
+    if (!ownership.startedByUs || config.stopNodeOnExit === false) return
+    const stopped = await nodes.stop()
+    if (stopped.ok) ctx.logger("agent-mesh").info(`dsh shutting down: ${stopped.message}`)
+    else ctx.logger("agent-mesh").info(`dsh shutdown: node stop failed: ${stopped.error}`)
+  })
 }
+
+/** Shared mutable lifecycle ownership: set by auto-start or the card's Start button. */
+export interface NodeOwnership { startedByUs: boolean }
 export { SamClient, SamCoreClient } from "@morewax/sam-mesh"
 export { SamToolClient } from "./tools/index.js"
 export { SamInferenceClient } from "./inference/index.js"

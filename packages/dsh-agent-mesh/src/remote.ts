@@ -1,14 +1,15 @@
 import { z } from "zod"
 import type { RemoteResult, TypertRemoteContribution } from "@deepseek-ai/dsh-typert-protocol"
 import type { MeshDashboardSnapshot, ApprovedAction, ActionResult } from "./web/host.js"
-import type { EnrollmentInfo, NodeStatus } from "@morewax/sam-mesh/node"
+import type { EnrollmentInfo } from "@morewax/sam-mesh/node"
+import type { NodeStatusView } from "./web/host.js"
 import type { ServiceRegistrationRequest, SkillInstallRequest } from "./operator/index.js"
 declare module "@deepseek-ai/dsh-typert-protocol" { interface TypertRemoteNamespaceMap { agentMeshWeb: {
   snapshot(): Promise<RemoteResult<MeshDashboardSnapshot>>; check(): Promise<RemoteResult<MeshDashboardSnapshot>>
   installSkill(request: SkillInstallRequest, approval: ApprovedAction): Promise<RemoteResult<ActionResult>>
   registerService(request: ServiceRegistrationRequest, approval: ApprovedAction): Promise<RemoteResult<ActionResult>>
   deviceFlowInstructions(): Promise<RemoteResult<string[]>>
-  nodeStatus(): Promise<RemoteResult<NodeStatus>>
+  nodeStatus(): Promise<RemoteResult<NodeStatusView>>
   startNode(approval: ApprovedAction): Promise<RemoteResult<ActionResult>>
   stopNode(approval: ApprovedAction): Promise<RemoteResult<ActionResult>>
   beginEnrollment(approval: ApprovedAction, options?: { controlPlane?: string }): Promise<RemoteResult<EnrollmentInfo | ActionResult>>
@@ -19,7 +20,7 @@ declare module "@deepseek-ai/dsh-typert-protocol" { interface TypertRemoteNamesp
 const any = z.unknown(), approval=z.object({approved:z.boolean(),approvedBy:z.string().optional()})
 const skill=z.object({source:z.string(),name:z.string().optional(),version:z.string().optional(),target:z.string().optional(),force:z.boolean().optional()})
 const service=z.object({name:z.string(),protocol:z.string(),endpoint:z.string(),metadata:z.record(z.string(),z.unknown()).optional(),ttlSeconds:z.number().optional()})
-const nodeStatusSchema=z.object({installed:z.boolean(),binaryPath:z.string().nullable(),enrolled:z.boolean(),running:z.boolean(),pid:z.number().nullable(),socketPath:z.string(),dataDir:z.string()})
+const nodeStatusSchema=z.object({installed:z.boolean(),binaryPath:z.string().nullable(),enrolled:z.boolean(),running:z.boolean(),pid:z.number().nullable(),socketPath:z.string(),dataDir:z.string(),managedByDsh:z.boolean()})
 const enrollmentInfo=z.object({sessionId:z.string(),state:z.union([z.literal("starting"),z.literal("awaiting_user"),z.literal("complete"),z.literal("failed"),z.literal("cancelled")]),controlPlane:z.string(),verificationUrl:z.string().nullable(),userCode:z.string().nullable(),error:z.string().nullable()})
 const actionResult=z.union([z.object({ok:z.literal(true),message:z.string()}),z.object({ok:z.literal(false),error:z.string()})])
 const enrollOptions=z.object({controlPlane:z.string().optional()}).optional()
