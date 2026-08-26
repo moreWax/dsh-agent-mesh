@@ -145,7 +145,7 @@ cd dsh-agent-mesh
 pnpm install
 pnpm fetch:binaries
 pnpm -r build
-node ../deepseek-harness/apps/cli/src/bin.ts plugin --profile web add link:$(pwd)/packages/dsh-agent-mesh
+node --import tsx/esm ../deepseek-harness/apps/cli/src/bin.ts plugin --profile web add link:$(pwd)/packages/dsh-agent-mesh
 ```
 
 What each step does:
@@ -158,8 +158,15 @@ What each step does:
 - The last line registers the plugin with your dsh `web` profile. Adjust the
   path if your deepseek-harness checkout lives elsewhere.
 
-Everything after the install — enroll, discover fleets, join, approve —
-happens in **Settings → Agent Mesh**; no further downloads, no terminal.
+Then start the Web UI from your deepseek-harness checkout and open
+**Settings → Agent Mesh**:
+
+```bash
+node --import tsx/esm apps/cli/src/bin.ts --profile web --port 3080
+```
+
+Enroll, discover fleets, join, approve — all in the card; no further
+downloads, no terminal.
 
 ## Development
 
