@@ -92,6 +92,7 @@ export function apply(ctx: Context, input: Config): void {
   ctx.provide("agentMeshStatus", new CordisMeshStatus(operator))
   void autoNode(nodes, config, (line) => ctx.logger("agent-mesh").info(line))
     .then((outcome) => { ownership.startedByUs = outcome.started })
+    .catch((error: unknown) => ctx.logger("agent-mesh").warn(`auto-node failed: ${error instanceof Error ? error.message : String(error)}`))
   // Option A: dsh owns what it starts. A node that was already running when
   // dsh booted is external and is left alone on shutdown.
   ctx.effect(() => async () => {

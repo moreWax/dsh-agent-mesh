@@ -228,8 +228,17 @@ export class SamNodeManager {
 
   private async resolveBinary(): Promise<string | null> {
     if (this.binary.includes('/')) return (await pathExecutable(this.binary)) ? this.binary : null
-    const pathEnv = process.env.PATH ?? ''
-    for (const dir of pathEnv.split(':')) {
+    // PATH first, then the documented user-local install location — service
+    // managers (systemd user units) routinely run with a stripped PATH that
+    // omits ~/.local/bin, and a stripped PATH must not read as "not installed".
+    const candidates = [
+      ...(process.env.PATH ?? '').split(':'),
+      join(homedir(), '.local', 'bin'),
+      '/usr/local/bin',
+      '/usr/bin',
+    ]
+    for (const dir of candidates) {
+      if (!dir) continue
       const candidate = join(dir, this.binary)
       if (await pathExecutable(candidate)) return candidate
     }
