@@ -32,6 +32,9 @@ function manager(): SamNodeManager {
     ...(process.env.SAM_NODE ? { samNode: process.env.SAM_NODE } : {}),
     ...(process.env.SAM_DATA_DIR ? { dataDir: process.env.SAM_DATA_DIR } : {}),
     ...(process.env.SAM_CONTROL_PLANE ? { controlPlane: process.env.SAM_CONTROL_PLANE } : {}),
+    // Public-hub posture: SAM_ANNOUNCE_PRIVATE=false keeps RFC1918/ULA
+    // addresses out of the swarm (upstream default is true — right for LANs).
+    ...(process.env.SAM_ANNOUNCE_PRIVATE !== undefined ? { announcePrivate: process.env.SAM_ANNOUNCE_PRIVATE !== 'false' } : {}),
   })
 }
 
