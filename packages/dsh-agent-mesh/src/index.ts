@@ -3,7 +3,7 @@ import type { Context } from "@deepseek-ai/cordis"
 import z from "@deepseek-ai/schemastery"
 import { credentialRef } from "@deepseek-ai/dsh-credentials"
 import type {} from "@deepseek-ai/dsh-credentials/types"
-import { SamClient } from "./core/index.js"
+import { SamClient } from "@morewax/sam-mesh"
 import { SamToolClient } from "./tools/index.js"
 import { SamInferenceClient } from "./inference/index.js"
 import { SamOperator, parseAgentMeshConfig } from "./operator/index.js"
@@ -43,7 +43,7 @@ export function apply(ctx: Context, input: Config): void {
   new AgentMeshWebHost(ctx, service)
   ctx.provide("agentMeshStatus", new CordisMeshStatus(operator))
 }
-export { SamClient, SamCoreClient } from "./core/index.js"
+export { SamClient, SamCoreClient } from "@morewax/sam-mesh"
 export { SamToolClient } from "./tools/index.js"
 export { SamInferenceClient } from "./inference/index.js"
 export { TaskClient } from "./tasks/index.js"

@@ -20,7 +20,16 @@
     "noEmit": true,
     "allowJs": true,
     "checkJs": false,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "paths": {
+      "@morewax/sam-mesh": [
+        "../sam-mesh/src/core/index.ts"
+      ],
+      "@morewax/sam-mesh/node": [
+        "../sam-mesh/src/node/index.ts"
+      ]
+    },
+    "baseUrl": "."
   },
   "include": [
     "src",

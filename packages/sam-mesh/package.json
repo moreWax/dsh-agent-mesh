@@ -1,0 +1,43 @@
+{
+  "name": "@morewax/sam-mesh",
+  "version": "0.0.1",
+  "description": "SAM mesh client + node kit: talk to a local sam-node and manage its lifecycle \u2014 enroll any machine into the mesh",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./lib/core/index.d.ts",
+      "default": "./lib/core/index.js"
+    },
+    "./core": {
+      "types": "./lib/core/index.d.ts",
+      "default": "./lib/core/index.js"
+    },
+    "./node": {
+      "types": "./lib/node/index.d.ts",
+      "default": "./lib/node/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "sam-mesh": "./lib/cli/index.js"
+  },
+  "files": [
+    "lib",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsdown": "^0.22.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

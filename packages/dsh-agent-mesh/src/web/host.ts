@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { SamNodeManager, type EnrollmentInfo, type NodeStatus } from "@morewax/sam-mesh/node"
 import type { Context } from "@deepseek-ai/cordis"
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol"
 import type { AgentMeshService } from "../index.js"
@@ -16,6 +17,8 @@ export interface ApprovedAction { approved: boolean; approvedBy?: string }
 export type ActionResult = { ok: true; message: string; value?: unknown } | { ok: false; error: string }
 
 export class AgentMeshWebHost extends TypertRemoteService {
+  private readonly nodes = new SamNodeManager()
+
   constructor(ctx: Context, private readonly mesh: AgentMeshService) { super(ctx, "agentMeshWeb") }
 
   @Remote("snapshot")
@@ -39,10 +42,49 @@ export class AgentMeshWebHost extends TypertRemoteService {
   }
 
   @Remote("check") async check(): Promise<MeshDashboardSnapshot> { return this.snapshot() }
+  @Remote("nodeStatus") async nodeStatus(): Promise<NodeStatus> { return this.nodes.status() }
+
   @Remote("startNode") async startNode(approval: ApprovedAction): Promise<ActionResult> {
     if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
-    try { await execFileAsync("sam-node", ["run", "--daemon"], { timeout: 30_000 }); return { ok: true, message: "sam-node start requested" } }
-    catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+    return this.nodes.start()
+  }
+
+  @Remote("stopNode") async stopNode(approval: ApprovedAction): Promise<ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    return this.nodes.stop()
+  }
+
+  /**
+   * Begin OIDC device-flow enrollment of THIS machine as a mesh node. The
+   * returned info carries the verification URL and user code once sam-node
+   * prints them; the card polls enrollmentStatus until the user authorizes
+   * in the browser. Joining a mesh is an identity-trust decision, so it is
+   * approval-gated like every other mutation here.
+   */
+  @Remote("beginEnrollment") async beginEnrollment(approval: ApprovedAction, options?: { controlPlane?: string }): Promise<EnrollmentInfo | ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const status = await this.nodes.status()
+    if (!status.installed) return { ok: false, error: "sam-node is not installed or not on PATH" }
+    if (status.enrolled) return { ok: false, error: `This machine already has a node identity in ${status.dataDir}; reset stays a deliberate terminal operation.` }
+    const session = this.nodes.beginEnrollment(options ?? {})
+    // Give the child a brief moment to print the device-flow block so the
+    // first card render usually already shows the URL and code.
+    const deadline = Date.now() + 5_000
+    while (session.state === "starting" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    return session.info()
+  }
+
+  @Remote("enrollmentStatus") async enrollmentStatus(sessionId: string): Promise<EnrollmentInfo | null> {
+    return this.nodes.enrollment(sessionId)
+  }
+
+  /** Cancel an in-flight enrollment. Abort-only (never grants anything), so ungated. */
+  @Remote("cancelEnrollment") async cancelEnrollment(sessionId: string): Promise<ActionResult> {
+    return this.nodes.cancelEnrollment(sessionId)
+      ? { ok: true, message: "Enrollment cancelled" }
+      : { ok: false, error: "No such enrollment session (already finished or expired)" }
   }
   @Remote("installSkill") async installSkill(request: SkillInstallRequest, approval: ApprovedAction): Promise<ActionResult> {
     if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }

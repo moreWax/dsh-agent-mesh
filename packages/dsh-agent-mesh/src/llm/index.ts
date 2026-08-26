@@ -6,9 +6,9 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-credentials/types'
 import { CallId, LlmAdapter, LlmError, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, LlmModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { SamClient } from '../core/index.js'
+import { SamClient } from '@morewax/sam-mesh'
 import { SamInferenceClient, type ChatCompletionChunk, type ChatMessage, type InferenceRoute, type RequiredLabels } from '../inference/index.js'
-import { SamHttpError, SamTransportError } from '../core/errors.js'
+import { SamHttpError, SamTransportError } from '@morewax/sam-mesh'
 
 export const name = 'agent-mesh-llm'
 export const inject = ['llm', 'credentials']

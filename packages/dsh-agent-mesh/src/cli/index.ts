@@ -2,16 +2,14 @@
 import { createInterface } from "node:readline/promises"
 import { stdin, stdout, stderr } from "node:process"
 import { init } from "./init.js"
-import { runClient } from "./client.js"
 
-function usage(): never { console.log(`Usage: dsh-agent-mesh <init|status|services|tools|models|call> [options]\n\nOptions:\n  --profile <name>  DSH profile (default: default)\n  --yes             approve requested non-destructive writes/actions\n  --start           plan and, with approval, start sam-node --daemonize\n  --join            plan and, with approval, start persistent device enrollment\n  --no-skill        do not install the SAM skill into DSH's visible skill root\n  --no-patch        do not atomically patch the profile\n\nInit is idempotent and never resets node identity. Destructive operations are not supported.`); process.exit(0) }
+function usage(): never { console.log(`Usage: dsh-agent-mesh init [options]\n\nOptions:\n  --profile <name>  DSH profile (default: default)\n  --yes             approve requested non-destructive writes/actions\n  --start           plan and, with approval, start sam-node --daemonize\n  --join            plan and, with approval, start persistent device enrollment\n  --no-skill        do not install the SAM skill into DSH's visible skill root\n  --no-patch        do not atomically patch the profile\n\nInit is idempotent and never resets node identity. Destructive operations are not supported.`); process.exit(0) }
 const args = process.argv.slice(2)
 if (args.length === 0 || args.includes("--help") || args.includes("-h")) usage()
 const command = args.shift()
 if (command && command !== "init") {
-  // Standalone mesh client subcommands: no dsh required, talks to the local sam-node.
-  await runClient([command, ...args])
-  process.exit(0)
+  console.error(`Unknown command: ${command}. Mesh client and node commands moved to the standalone kit: npx @morewax/sam-mesh <status|tools|models|call|node>`)
+  process.exit(2)
 }
 if (command !== "init") { console.error(`Unknown command: ${command}`); process.exit(2) }
 let profile = "default", yes = false, start = false, join = false, skill = true, patch = true

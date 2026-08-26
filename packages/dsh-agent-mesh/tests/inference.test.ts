@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { SamClient } from '../src/core/index.js'
+import { SamClient } from '@morewax/sam-mesh'
 import {
   InferenceProtocolError,
   InferenceStreamingUnsupportedError,

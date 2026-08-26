@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SamClient, SamHttpError } from '../src/core/index.js'
+import { SamClient, SamHttpError } from '@morewax/sam-mesh'
 import { InferenceError, SamInferenceClient } from '../src/inference/index.js'
 
 const live = process.env.SAM_LIVE === '1' ? describe : describe.skip

@@ -1,6 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
-import { SamClient } from '../src/core/index.js'
+import { SamClient } from '@morewax/sam-mesh'
 import { SamToolClient } from '../src/tools/index.js'
 import { projectedToolName, SamToolsProvider } from '../src/providers/tools.js'
 
