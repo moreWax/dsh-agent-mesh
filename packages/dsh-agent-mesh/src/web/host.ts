@@ -124,7 +124,12 @@ export class AgentMeshWebHost extends TypertRemoteService {
         localServiceCount = (await this.mesh.core.listLocalServices()).length
       } catch { peerCount = undefined }
     }
-    return { checks: buildChecks({ installed: status.installed, enrolled: status.enrolled, running: status.running, peerCount, serviceCount, localServiceCount }) }
+    const checks = buildChecks({ installed: status.installed, enrolled: status.enrolled, running: status.running, peerCount, serviceCount, localServiceCount })
+    if (status.enrolled && status.enrolledHub) {
+      const enrolledCheck = checks.find(c => c.name === "enrolled on a hub")
+      if (enrolledCheck) enrolledCheck.detail = status.enrolledHub
+    }
+    return { checks }
   }
 
   @Remote("installSkill") async installSkill(request: SkillInstallRequest, approval: ApprovedAction): Promise<ActionResult> {

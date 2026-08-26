@@ -14,6 +14,7 @@
  * Connection env: SAM_SOCKET (default ~/.config/sam-mesh/sam.sock),
  *                 SAM_TCP_URL (fallback http://127.0.0.1:8080).
  */
+import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { stdout, stderr, exit } from "node:process"
@@ -75,7 +76,12 @@ async function resolvePeer(sam: SamClient, peerArg: string): Promise<string> {
 function readCapability(rest: string[]): string | undefined {
   const i = rest.indexOf("--capability")
   if (i >= 0 && rest[i + 1]) return rest[i + 1]
-  return process.env.SAM_MESH_CAPABILITY || undefined
+  if (process.env.SAM_MESH_CAPABILITY) return process.env.SAM_MESH_CAPABILITY
+  // Fleet-join provisioned file (0600), written by `sam-mesh fleet join`.
+  try {
+    const value = readFileSync(join(homedir(), ".config", "sam-mesh", "fleet-capability"), "utf8").trim()
+    return value || undefined
+  } catch { return undefined }
 }
 
 export async function runClient(args: string[]): Promise<void> {

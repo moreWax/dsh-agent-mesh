@@ -28,6 +28,9 @@ npx @morewax/sam-mesh tail <peer> <task-id>      # stream a remote task's events
 npx @morewax/sam-mesh token mint --control-plane <url> --admin-token-path <file> [--ssh user@host] [--qr]
                                                  # mint a single-use enrollment token; optional
                                                  # ssh handoff one-liner / terminal QR (qrencode)
+npx @morewax/sam-mesh fleet invite [--ssh u@h]    # create a one-file fleet invite (0600)
+npx @morewax/sam-mesh fleet join --invite <file>   # seamless onboarding: hub-mismatch detection,
+                                                 # enroll, capability, dsh patch, doctor
 npx @morewax/sam-mesh skill                      # print the agent-facing onboarding doc
 ```
 

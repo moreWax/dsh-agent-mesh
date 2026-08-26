@@ -6,7 +6,7 @@ import type { ActionResult, EnrollmentSession, NodeStatus } from "@morewax/sam-m
 /** A fake manager with the lifecycle surface the host uses. */
 function fakeManager(status: Partial<NodeStatus>, startResult: ActionResult = { ok: true, message: "sam-node started" }) {
   const base: NodeStatus = {
-    installed: true, binaryPath: "/usr/bin/sam-node", enrolled: true, running: false,
+    installed: true, binaryPath: "/usr/bin/sam-node", enrolled: true, enrolledHub: "https://hub.sam-mesh.dev", running: false,
     pid: null, socketPath: "/tmp/sam.sock", dataDir: "/tmp/sam",
   }
   return {

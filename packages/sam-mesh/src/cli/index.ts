@@ -24,6 +24,7 @@ import { runClient } from './client.js'
 import { SamNodeManager, DEFAULT_CONTROL_PLANE } from '../node/index.js'
 import { INSTALL_INSTRUCTION, QR_MISSING_HINT, SAM_INSTALL_CMD, buildChecks, expandPeer, formatMintBlock, formatSshHandoff, nextJoinStep, renderDoctor } from './plan.js'
 import { AGENT_SKILL } from './skill-doc.js'
+import { runFleet } from './fleet.js'
 
 const CLIENT_COMMANDS = new Set(['status', 'peers', 'services', 'tools', 'models', 'call', 'tail'])
 
@@ -149,7 +150,7 @@ async function runNode(args: string[]): Promise<void> {
 
 const [, , command, ...rest] = argv
 if (!command || command === '--help' || command === '-h') {
-  stdout.write(`Usage: sam-mesh <status|peers|services|tools|models|call|tail|node|token|doctor|skill> [args]
+  stdout.write(`Usage: sam-mesh <status|peers|services|tools|models|call|tail|node|token|fleet|doctor|skill> [args]
 
 Mesh client (local node must be running):
   status                      Mesh + node snapshot
@@ -224,8 +225,13 @@ else if (command === 'doctor') {
     installed: status.installed, enrolled: status.enrolled, running: status.running,
     peerCount, serviceCount, localServiceCount,
   })
+  if (status.enrolled && status.enrolledHub) {
+    const enrolledCheck = checks.find(ch => ch.name === 'enrolled on a hub')
+    if (enrolledCheck) enrolledCheck.detail = status.enrolledHub
+  }
   stdout.write(renderDoctor(checks) + '\n')
 }
+else if (command === 'fleet') await runFleet(rest)
 else if (command === 'skill') stdout.write(AGENT_SKILL + '\n')
 else if (command === 'node') await runNode(rest)
 else if (CLIENT_COMMANDS.has(command)) await runClient([command, ...rest])

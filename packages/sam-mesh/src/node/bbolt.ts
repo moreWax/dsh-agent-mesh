@@ -124,3 +124,11 @@ export function hasMeshIdentity(storeBytes: Buffer): boolean {
   const v = bboltGet(storeBytes, 'identity', 'identity_biscuit')
   return v !== null && v.length > 0
 }
+
+/** The hub a store is enrolled on (control_plane_url from the LIVE tree). */
+export function readEnrolledHub(storeBytes: Buffer): string | null {
+  const v = bboltGet(storeBytes, 'identity', 'control_plane_url')
+  if (!v || v.length === 0) return null
+  const s = v.toString('utf8')
+  return s.startsWith('http') ? s : null
+}

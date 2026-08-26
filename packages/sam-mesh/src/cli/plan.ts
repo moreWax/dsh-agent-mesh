@@ -176,3 +176,117 @@ export function withCapability(args: Record<string, unknown>, capability: string
   if (!capability) return args
   return { ...args, _capability: capability }
 }
+
+// ─── fleet onboarding ──────────────────────────────────────────────────────
+
+/**
+ * A fleet invite: everything a new machine needs to become a full peer,
+ * carried as one 0600 file. Created by `fleet invite` on any fleet machine,
+ * consumed by `fleet join --invite <file>` on the joining one. The capability
+ * is a secret — the file is 0600 and travels by ssh/QR, never chat.
+ */
+export interface FleetInvite {
+  version: 1
+  controlPlane: string
+  /** Fleet-unique service name both sides announce (public-hub discovery key). */
+  serviceName: string
+  /** Fleet capability: mesh calls to gated fleet services must present it. */
+  capability: string
+  /** False on the public hub (never leak RFC1918); true on private/LAN hubs. */
+  announcePrivate: boolean
+  /** Private-hub only: unattended enrollment. Public-hub joins use the device flow. */
+  bootstrapToken?: string | undefined
+  createdAt: string
+}
+
+export function encodeFleetInvite(invite: FleetInvite): string {
+  return JSON.stringify(invite, null, 2) + '\n'
+}
+
+export function decodeFleetInvite(text: string): FleetInvite | { error: string } {
+  let value: unknown
+  try { value = JSON.parse(text) } catch { return { error: 'invite is not valid JSON' } }
+  const v = value as Record<string, unknown>
+  if (v?.version !== 1) return { error: 'unsupported invite version (expected 1)' }
+  if (typeof v.controlPlane !== 'string' || !v.controlPlane.startsWith('http')) return { error: 'invite has no valid controlPlane' }
+  if (typeof v.serviceName !== 'string' || !v.serviceName) return { error: 'invite has no serviceName' }
+  if (typeof v.capability !== 'string' || v.capability.length < 16) return { error: 'invite has no usable capability' }
+  return {
+    version: 1, controlPlane: v.controlPlane, serviceName: v.serviceName,
+    capability: v.capability, announcePrivate: v.announcePrivate !== false,
+    ...(typeof v.bootstrapToken === 'string' && v.bootstrapToken ? { bootstrapToken: v.bootstrapToken } : {}),
+    createdAt: typeof v.createdAt === 'string' ? v.createdAt : new Date().toISOString(),
+  }
+}
+
+/** Decide what enrollment step a join needs. Pure — tested against every hub-state combination. */
+export type FleetJoinEnrollment =
+  | { action: 'enroll' }                                  // not enrolled anywhere
+  | { action: 'none' }                                    // already on the fleet's hub
+  | { action: 'reset-required'; currentHub: string }      // enrolled elsewhere: destructive, needs typed confirm
+
+export function fleetJoinEnrollment(enrolled: boolean, enrolledHub: string | null, invite: FleetInvite): FleetJoinEnrollment {
+  if (!enrolled) return { action: 'enroll' }
+  const normalize = (u: string) => u.replace(/\/+$/, '')
+  if (enrolledHub && normalize(enrolledHub) === normalize(invite.controlPlane)) return { action: 'none' }
+  return { action: 'reset-required', currentHub: enrolledHub ?? 'unknown hub' }
+}
+
+/**
+ * Merge refs into a dsh v1 credentials file WITHOUT clobbering: existing
+ * keys win (a machine's own SAM_NODE_AUTH is never overwritten), missing
+ * keys are appended under refs:. Returns the new file text. Pure.
+ */
+export function mergeCredentialRefs(fileText: string | null, refs: Record<string, string>): string {
+  const lines = (fileText ?? 'version: 1\nrefs:\n').split('\n')
+  const present = new Set(
+    lines.map(l => /^ {2}([A-Z0-9_]+):/.exec(l)?.[1]).filter((k): k is string => k !== undefined),
+  )
+  const additions = Object.entries(refs).filter(([k]) => !present.has(k))
+  if (additions.length === 0) return lines.join('\n')
+  const block = additions.map(([k, v]) => `  ${k}: ${v}`)
+  const refsIndex = lines.findIndex(l => /^refs:/.test(l))
+  if (refsIndex === -1) return [...lines.filter(l => l.trim() !== ''), 'refs:', ...block, ''].join('\n')
+  return [...lines.slice(0, refsIndex + 1), ...block, ...lines.slice(refsIndex + 1)].join('\n')
+}
+
+/** The dsh profile patch rows for fleet posture. RESTATES every key — cordis patch replaces row config. */
+export function fleetProfilePatch(invite: FleetInvite): string {
+  return `# Fleet posture from sam-mesh fleet invite (${invite.createdAt}).
+# NOTE: patch config REPLACES row config (no merge) — every key is restated.
+- id: agent-mesh
+  config:
+    socketPath: ~/.config/sam-mesh/sam.sock
+    tcpUrl: http://127.0.0.1:8080
+    preferSocket: true
+    nodeCredentialRef: SAM_NODE_AUTH
+    nodeControlPlane: ${invite.controlPlane}
+    nodeAnnouncePrivate: ${invite.announcePrivate}
+- id: agent-mesh-task-service
+  config:
+    host: 127.0.0.1
+    port: 0
+    path: /mcp
+    healthPath: /healthz
+    serviceName: ${invite.serviceName}
+    registerWithSam: true
+    shutdownTimeoutMs: 5000
+    dbPath: ~/.dsh/storages/agent-mesh-task-service/tasks.db
+    capabilityCredentialRef: MESH_TASK_CAPABILITY
+`
+}
+
+/**
+ * Merge fleet rows into an existing profile patch. Appending rows is safe
+ * (YAML array); replacing existing agent-mesh rows textually is NOT — that
+ * case hands back to the human with the exact block to reconcile.
+ */
+export function mergeProfilePatch(existing: string | null, invite: FleetInvite): { text: string } | { conflict: string } {
+  const ours = fleetProfilePatch(invite)
+  if (existing === null || existing.trim() === '') return { text: ours }
+  if (/^- id: agent-mesh/m.test(existing) || /^  - id: agent-mesh/m.test(existing) || /id: agent-mesh/.test(existing)) {
+    return { conflict: `profile patch already has agent-mesh rows — reconcile manually with:\n\n${ours}` }
+  }
+  const trimmed = existing.endsWith('\n') ? existing : existing + '\n'
+  return { text: trimmed + ours }
+}

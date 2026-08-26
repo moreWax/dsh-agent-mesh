@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { hasMeshIdentity } from './bbolt.js'
+import { hasMeshIdentity, readEnrolledHub } from './bbolt.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -40,6 +40,8 @@ export interface NodeStatus {
   installed: boolean
   binaryPath: string | null
   enrolled: boolean
+  /** The hub the node is enrolled on (live store read); null when unenrolled. */
+  enrolledHub: string | null
   running: boolean
   pid: number | null
   socketPath: string
@@ -169,18 +171,7 @@ export class SamNodeManager {
    * sam-node itself rejects when the node is in fact enrolled), never to a
    * silent dead mesh.
    */
-  private async detectEnrolled(): Promise<boolean> {
-    let data: Buffer
-    try { data = await readFile(this.identityPath) } catch { return false }
-    // Live bbolt walk, not a byte scan: `sam-node reset` deletes keys from
-    // live pages only (freelist keeps stale copies), so scanning for the
-    // control-plane URL false-positives on reset machines. Ground truth is
-    // sam-node's own LoadIdentity predicate: identity/identity_biscuit
-    // present and non-empty.
-    return hasMeshIdentity(data)
-  }
-
-  async status(): Promise<NodeStatus> {
+async status(): Promise<NodeStatus> {
     const binaryPath = await this.resolveBinary()
     let pid: number | null = null
     try {
@@ -188,10 +179,16 @@ export class SamNodeManager {
       const parsed = Number(raw.trim())
       if (Number.isInteger(parsed) && pidAlive(parsed)) pid = parsed
     } catch { /* no pidfile */ }
-    const enrolled = await this.detectEnrolled()
+    let enrolled = false
+    let enrolledHub: string | null = null
+    try {
+      const data = await readFile(this.identityPath)
+      enrolled = hasMeshIdentity(data)
+      enrolledHub = enrolled ? readEnrolledHub(data) : null
+    } catch { /* no store yet */ }
     const running = pid !== null || await socketAnswers(this.socketPath)
     return {
-      installed: binaryPath !== null, binaryPath, enrolled, running, pid,
+      installed: binaryPath !== null, binaryPath, enrolled, enrolledHub, running, pid,
       socketPath: this.socketPath, dataDir: this.dataDir,
     }
   }

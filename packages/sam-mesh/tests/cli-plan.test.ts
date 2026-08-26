@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildChecks, expandPeer, formatMintBlock, formatSshHandoff, nextJoinStep, parseWatch, renderDoctor, shortId, withCapability } from '../src/cli/plan.js'
+import { buildChecks, decodeFleetInvite, encodeFleetInvite, expandPeer, fleetJoinEnrollment, formatMintBlock, formatSshHandoff, mergeCredentialRefs, mergeProfilePatch, nextJoinStep, parseWatch, renderDoctor, shortId, withCapability, type FleetInvite } from '../src/cli/plan.js'
 
 describe('nextJoinStep', () => {
   it('offers install when the binary is missing — interactive or not', () => {
@@ -103,5 +103,74 @@ describe('withCapability', () => {
   it('passes args through untouched when no capability is configured', () => {
     expect(withCapability({ a: 1 }, undefined)).toEqual({ a: 1 })
     expect(withCapability({ a: 1 }, '')).toEqual({ a: 1 })
+  })
+})
+
+const INVITE: FleetInvite = {
+  version: 1, controlPlane: 'https://hub.sam-mesh.dev', serviceName: 'fleet-tasks',
+  capability: 'a]'.padEnd(48, '0').replace(']', '1'), announcePrivate: false, createdAt: '2026-08-26T00:00:00Z',
+}
+
+describe('fleet invite', () => {
+  it('round-trips through encode/decode', () => {
+    const decoded = decodeFleetInvite(encodeFleetInvite(INVITE))
+    expect(decoded).toEqual(INVITE)
+  })
+  it('rejects garbage with a reason', () => {
+    expect(decodeFleetInvite('not json')).toHaveProperty('error')
+    expect(decodeFleetInvite('{"version":2}')).toHaveProperty('error')
+    expect(decodeFleetInvite('{"version":1,"controlPlane":"ftp://x"}')).toHaveProperty('error')
+  })
+})
+
+describe('fleetJoinEnrollment', () => {
+  it('enrolls fresh machines, skips same-hub, demands reset for hub moves', () => {
+    expect(fleetJoinEnrollment(false, null, INVITE)).toEqual({ action: 'enroll' })
+    expect(fleetJoinEnrollment(true, 'https://hub.sam-mesh.dev/', INVITE)).toEqual({ action: 'none' })
+    const move = fleetJoinEnrollment(true, 'http://192.168.50.17:8480', INVITE)
+    expect(move.action).toBe('reset-required')
+    if (move.action === 'reset-required') expect(move.currentHub).toContain('192.168.50.17')
+  })
+})
+
+describe('mergeCredentialRefs', () => {
+  it('creates a v1 file from nothing', () => {
+    const out = mergeCredentialRefs(null, { MESH_TASK_CAPABILITY: 'abc' })
+    expect(out).toContain('version: 1')
+    expect(out).toContain('refs:')
+    expect(out).toContain('  MESH_TASK_CAPABILITY: abc')
+  })
+  it('never overwrites existing keys, appends missing ones', () => {
+    const existing = 'version: 1\nrefs:\n  SAM_NODE_AUTH: mine\n'
+    const out = mergeCredentialRefs(existing, { SAM_NODE_AUTH: 'theirs', MESH_TASK_CAPABILITY: 'abc' })
+    expect(out).toContain('  SAM_NODE_AUTH: mine')
+    expect(out).not.toContain('SAM_NODE_AUTH: theirs')
+    expect(out).toContain('  MESH_TASK_CAPABILITY: abc')
+  })
+  it('is idempotent', () => {
+    const once = mergeCredentialRefs(null, { A: '1' })
+    expect(mergeCredentialRefs(once, { A: '1' })).toBe(once)
+  })
+})
+
+describe('mergeProfilePatch', () => {
+  it('writes a fresh patch when none exists', () => {
+    const out = mergeProfilePatch(null, INVITE)
+    expect(out).toHaveProperty('text')
+    if ('text' in out) {
+      expect(out.text).toContain('nodeControlPlane: https://hub.sam-mesh.dev')
+      expect(out.text).toContain('nodeAnnouncePrivate: false')
+      expect(out.text).toContain('serviceName: fleet-tasks')
+      expect(out.text).toContain('capabilityCredentialRef: MESH_TASK_CAPABILITY')
+    }
+  })
+  it('appends to a patch that has no agent-mesh rows', () => {
+    const out = mergeProfilePatch('- id: something-else\n  config: {}\n', INVITE)
+    expect(out).toHaveProperty('text')
+    if ('text' in out) expect(out.text).toContain('id: something-else')
+  })
+  it('refuses to clobber existing agent-mesh rows — hands the block back', () => {
+    const out = mergeProfilePatch('- id: agent-mesh\n  config:\n    foo: bar\n', INVITE)
+    expect(out).toHaveProperty('conflict')
   })
 })
