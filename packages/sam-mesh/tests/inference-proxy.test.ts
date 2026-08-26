@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { AddressInfo } from 'node:net'
-import { capabilityMatches, classifyGate, createInferenceProxyServer, detectInferenceBackends, probeBackend, resolveAutoTarget, startAnnounceLoop, WELL_KNOWN_BACKENDS } from '../src/node/inference-proxy.js'
+import { capabilityMatches, classifyGate, createInferenceProxyServer, filterModelList, requestModel, detectInferenceBackends, probeBackend, resolveAutoTarget, startAnnounceLoop, WELL_KNOWN_BACKENDS } from '../src/node/inference-proxy.js'
 
 describe('classifyGate', () => {
   it('opens only GET /v1/models', () => {
@@ -137,5 +137,64 @@ describe('backend auto-detection', () => {
     expect(res).toMatchObject({ target: aliveUrl, ambiguous: false })
     expect(res.found.map(b => b.name)).toEqual(['fake'])
     alive.close()
+  })
+})
+
+
+describe('model allowlist', () => {
+  it('filters the listing and blocks disallowed execution models uniformly', async () => {
+    const upstream = createServer((req, res) => {
+      if (req.url === '/v1/models') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ object: 'list', data: [{ id: 'public-a' }, { id: 'public-b' }, { id: 'secret-sub' }] })); return }
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}')
+    })
+    const upstreamUrl = await listen(upstream)
+    const proxy = createInferenceProxyServer({ host: '127.0.0.1', port: 0, target: upstreamUrl, requiredCapability: 'cap', modelAllowlist: ['public-a', 'public-b'] })
+    const proxyUrl = await listen(proxy)
+    // listing filtered
+    const listing = await (await fetch(`${proxyUrl}/v1/models`)).json() as { data: Array<{ id: string }> }
+    expect(listing.data.map(m => m.id)).toEqual(['public-a', 'public-b'])
+    // allowed model executes
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap', 'content-type': 'application/json' }, body: JSON.stringify({ model: 'public-a', messages: [] }) })).status).toBe(200)
+    // disallowed model: uniform 404, upstream never touched
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap', 'content-type': 'application/json' }, body: JSON.stringify({ model: 'secret-sub', messages: [] }) })).status).toBe(404)
+    // capability gate still applies on top of the allowlist
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'public-a', messages: [] }) })).status).toBe(403)
+    proxy.close(); upstream.close()
+  })
+  it('empty allowlist passes everything through (no buffering regressions)', async () => {
+    const upstream = createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"data":[{"id":"any"}]}') })
+    const upstreamUrl = await listen(upstream)
+    const proxy = createInferenceProxyServer({ host: '127.0.0.1', port: 0, target: upstreamUrl, requiredCapability: 'cap' })
+    const proxyUrl = await listen(proxy)
+    const listing = await (await fetch(`${proxyUrl}/v1/models`)).json() as { data: Array<{ id: string }> }
+    expect(listing.data.map(m => m.id)).toEqual(['any'])
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap', 'content-type': 'application/json' }, body: JSON.stringify({ model: 'any', messages: [] }) })).status).toBe(200)
+    proxy.close(); upstream.close()
+  })
+  it('getter form re-reads per request', async () => {
+    let list = ['a']
+    const upstream = createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') })
+    const upstreamUrl = await listen(upstream)
+    const proxy = createInferenceProxyServer({ host: '127.0.0.1', port: 0, target: upstreamUrl, requiredCapability: 'cap', modelAllowlist: () => list })
+    const proxyUrl = await listen(proxy)
+    const call = (model: string) => fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap', 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: [] }) })
+    expect((await call('b')).status).toBe(404)
+    list = ['a', 'b']
+    expect((await call('b')).status).toBe(200)
+    proxy.close(); upstream.close()
+  })
+})
+
+describe('allowlist helpers', () => {
+  it('requestModel reads only a non-empty string model', () => {
+    expect(requestModel({ model: 'm' })).toBe('m')
+    expect(requestModel({ model: '' })).toBeUndefined()
+    expect(requestModel({ model: 3 })).toBeUndefined()
+    expect(requestModel(null)).toBeUndefined()
+    expect(requestModel('x')).toBeUndefined()
+  })
+  it('filterModelList keeps id-bearing entries on the list and preserves other fields', () => {
+    expect(filterModelList({ object: 'list', data: [{ id: 'a' }, { id: 'b' }, { noId: true }] }, ['a'])).toEqual({ object: 'list', data: [{ id: 'a' }] })
+    expect(filterModelList({ nope: 1 }, ['a'])).toBeUndefined()
   })
 })

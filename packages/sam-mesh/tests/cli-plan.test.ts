@@ -165,6 +165,7 @@ describe('mergeProfilePatch', () => {
       expect(out.text).toContain('callCapabilityRef: MESH_TASK_CAPABILITY')
       expect(out.text).toContain('capabilityCredentialRef: MESH_TASK_CAPABILITY')
       expect(out.text).toMatch(/id: agent-mesh-llm[\s\S]*capabilityCredentialRef: MESH_TASK_CAPABILITY/)
+      expect(out.text).toMatch(/id: agent-mesh-tools[\s\S]*serviceName: fleet-tasks/)
     }
   })
   it('appends to a patch that has no agent-mesh rows', () => {

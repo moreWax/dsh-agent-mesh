@@ -46,6 +46,9 @@ sam-mesh services                   # what remote peers announce
 sam-mesh call <peer> <tool> '<json-args>'
 sam-mesh tail <peer> <task-id>      # stream task events until it settles
 sam-mesh models                     # mesh inference endpoints (OpenAI-compatible)
+# In dsh: mesh models appear in the model picker under the SAM Mesh provider
+# automatically — select one and chat; the fleet capability is injected per call.
+# Serving your own backend: Settings → Agent Mesh → Share models with the fleet.
 ```
 
 ## Invariants

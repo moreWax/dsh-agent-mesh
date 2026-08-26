@@ -11,11 +11,11 @@ import type { ActionResult, ApprovedAction, MeshDashboardSnapshot } from "../web
 import type { ServiceRegistrationRequest, SkillInstallRequest } from "../operator/index.js"
 import type { EnrollmentInfo } from "@morewax/sam-mesh/node"
 import type { DoctorCheck } from "@morewax/sam-mesh/plan"
-import type { NodeStatusView } from "../web/host.js"
+import type { NodeStatusView, ServeStatusView, ServeConfigureRequest } from "../web/host.js"
 export interface BinaryOptionsView { options: Array<{ path: string; source: "env"|"bundled"|"path"; suggested: boolean; tag?: string }>; selected: string; auto: boolean }
-export interface MeshWebApi { snapshot():Promise<MeshDashboardSnapshot>; check():Promise<MeshDashboardSnapshot>; startNode(a:ApprovedAction):Promise<ActionResult>; installSkill(r:SkillInstallRequest,a:ApprovedAction):Promise<ActionResult>; registerService(r:ServiceRegistrationRequest,a:ApprovedAction):Promise<ActionResult>; deviceFlowInstructions():Promise<string[]>; nodeStatus():Promise<NodeStatusView>; nodeBinaryOptions():Promise<BinaryOptionsView>; stopNode(a:ApprovedAction):Promise<ActionResult>; beginEnrollment(a:ApprovedAction,o?:{controlPlane?:string}):Promise<EnrollmentInfo|ActionResult>; enrollmentStatus(id:string):Promise<EnrollmentInfo|null>; activeEnrollment():Promise<EnrollmentInfo|null>; cancelEnrollment(id:string):Promise<ActionResult>; meshDoctor():Promise<{checks:DoctorCheck[]}>; pairRequests():Promise<{pairing:boolean;pending:{requestId:string;label:string;requestedAt:number}[]}>; approvePairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; rejectPairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; fleetDiscover():Promise<{fleets:{name:string;providers:number;peerIds:string[]}[];node:{running:boolean;enrolled:boolean;enrolledHub:string|null}}>; requestFleetPair(q:{serviceName:string;peerId?:string;label?:string},a:ApprovedAction):Promise<{sessionId?:string;ok:boolean;error?:string}>; fleetPairStatus(id:string):Promise<{state:string;fleet?:string;error?:string;notes?:string[]}> }
+export interface MeshWebApi { snapshot():Promise<MeshDashboardSnapshot>; check():Promise<MeshDashboardSnapshot>; startNode(a:ApprovedAction):Promise<ActionResult>; installSkill(r:SkillInstallRequest,a:ApprovedAction):Promise<ActionResult>; registerService(r:ServiceRegistrationRequest,a:ApprovedAction):Promise<ActionResult>; deviceFlowInstructions():Promise<string[]>; nodeStatus():Promise<NodeStatusView>; nodeBinaryOptions():Promise<BinaryOptionsView>; stopNode(a:ApprovedAction):Promise<ActionResult>; beginEnrollment(a:ApprovedAction,o?:{controlPlane?:string}):Promise<EnrollmentInfo|ActionResult>; enrollmentStatus(id:string):Promise<EnrollmentInfo|null>; activeEnrollment():Promise<EnrollmentInfo|null>; cancelEnrollment(id:string):Promise<ActionResult>; meshDoctor():Promise<{checks:DoctorCheck[]}>; pairRequests():Promise<{pairing:boolean;pending:{requestId:string;label:string;requestedAt:number}[]}>; approvePairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; rejectPairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; fleetDiscover():Promise<{fleets:{name:string;providers:number;peerIds:string[]}[];node:{running:boolean;enrolled:boolean;enrolledHub:string|null}}>; requestFleetPair(q:{serviceName:string;peerId?:string;label?:string},a:ApprovedAction):Promise<{sessionId?:string;ok:boolean;error?:string}>; fleetPairStatus(id:string):Promise<{state:string;fleet?:string;error?:string;notes?:string[]}>; inferenceServeStatus():Promise<ServeStatusView>; inferenceServeConfigure(r:ServeConfigureRequest,a:ApprovedAction):Promise<ActionResult> }
 function unwrap<T>(r:{ok:true;value:T}|{ok:false;error:{message:string}}):T { if(!r.ok) throw new Error(r.error.message); return r.value }
-export function createMeshWebApi(ctx:Context):MeshWebApi { const r=ctx.remote.agentMeshWeb; return {snapshot:async()=>unwrap(await r.snapshot()),check:async()=>unwrap(await r.check()),startNode:async a=>unwrap(await r.startNode(a)),installSkill:async(q,a)=>unwrap(await r.installSkill(q,a)),registerService:async(q,a)=>unwrap(await r.registerService(q,a)),deviceFlowInstructions:async()=>unwrap(await r.deviceFlowInstructions()),nodeStatus:async()=>unwrap(await r.nodeStatus()),nodeBinaryOptions:async()=>unwrap(await r.nodeBinaryOptions()),stopNode:async a=>unwrap(await r.stopNode(a)),beginEnrollment:async(a,o)=>unwrap(await r.beginEnrollment(a,o)),enrollmentStatus:async id=>unwrap(await r.enrollmentStatus(id)),activeEnrollment:async()=>unwrap(await r.activeEnrollment()),cancelEnrollment:async id=>unwrap(await r.cancelEnrollment(id)),meshDoctor:async()=>unwrap(await r.meshDoctor()),pairRequests:async()=>unwrap(await r.pairRequests()),approvePairRequest:async(id,a)=>unwrap(await r.approvePairRequest(id,a)),rejectPairRequest:async(id,a)=>unwrap(await r.rejectPairRequest(id,a)),fleetDiscover:async()=>unwrap(await r.fleetDiscover()),requestFleetPair:async(q,a)=>unwrap(await r.requestFleetPair(q,a)),fleetPairStatus:async id=>unwrap(await r.fleetPairStatus(id))} }
+export function createMeshWebApi(ctx:Context):MeshWebApi { const r=ctx.remote.agentMeshWeb; return {snapshot:async()=>unwrap(await r.snapshot()),check:async()=>unwrap(await r.check()),startNode:async a=>unwrap(await r.startNode(a)),installSkill:async(q,a)=>unwrap(await r.installSkill(q,a)),registerService:async(q,a)=>unwrap(await r.registerService(q,a)),deviceFlowInstructions:async()=>unwrap(await r.deviceFlowInstructions()),nodeStatus:async()=>unwrap(await r.nodeStatus()),nodeBinaryOptions:async()=>unwrap(await r.nodeBinaryOptions()),stopNode:async a=>unwrap(await r.stopNode(a)),beginEnrollment:async(a,o)=>unwrap(await r.beginEnrollment(a,o)),enrollmentStatus:async id=>unwrap(await r.enrollmentStatus(id)),activeEnrollment:async()=>unwrap(await r.activeEnrollment()),cancelEnrollment:async id=>unwrap(await r.cancelEnrollment(id)),meshDoctor:async()=>unwrap(await r.meshDoctor()),pairRequests:async()=>unwrap(await r.pairRequests()),approvePairRequest:async(id,a)=>unwrap(await r.approvePairRequest(id,a)),rejectPairRequest:async(id,a)=>unwrap(await r.rejectPairRequest(id,a)),fleetDiscover:async()=>unwrap(await r.fleetDiscover()),requestFleetPair:async(q,a)=>unwrap(await r.requestFleetPair(q,a)),fleetPairStatus:async id=>unwrap(await r.fleetPairStatus(id)),inferenceServeStatus:async()=>unwrap(await r.inferenceServeStatus()),inferenceServeConfigure:async(q,a)=>unwrap(await r.inferenceServeConfigure(q,a))} }
 const box:React.CSSProperties={border:"1px solid var(--border,#444)",borderRadius:10,padding:16,display:"grid",gap:12}; const button:React.CSSProperties={padding:"7px 12px",borderRadius:6,cursor:"pointer"};
 function Json({value}:{value:unknown}) { return <pre style={{whiteSpace:"pre-wrap",maxHeight:220,overflow:"auto",fontSize:12}}>{JSON.stringify(value,null,2)}</pre> }
 export function MeshSettingsCard({api}:{api:MeshWebApi}) { const [s,setS]=useState<MeshDashboardSnapshot>(); const [error,setError]=useState(""); const [notice,setNotice]=useState(""); const load=useCallback(async()=>{setError("");try{setS(await api.snapshot())}catch(e){setError(e instanceof Error?e.message:String(e))}},[api]); useEffect(()=>{void load()},[load]);
@@ -186,7 +186,45 @@ function BinaryField({api,value,onChange}:{api:MeshWebApi;value:string;onChange:
 /** Settings → Plugins → agent-mesh: every plugin knob as a form field. Writes
  * persist to settings.yaml through the settings scope; boot-time keys apply on
  * the next dsh start, decision-time keys (stopNodeOnExit, control plane) live. */
-export function MeshConfigCard({scope,api}:{scope:SettingsScope<MeshSettingsSection>;api?:MeshWebApi}) {
+export 
+/** Share-your-models section: detected backends, one-click serve, live roster.
+ *  Writes the managed patch block via an approved remote; a dsh restart applies it. */
+function ServeSection({api}:{api:MeshWebApi}) {
+ const [status,setStatus]=useState<ServeStatusView>()
+ const [target,setTarget]=useState("auto")
+ const [name,setName]=useState("dsh-mesh-inference")
+ const [allowlist,setAllowlist]=useState("")
+ const [notice,setNotice]=useState("")
+ const load=useCallback(async()=>{ try{ const s=await api.inferenceServeStatus(); setStatus(s); if(s.configured){ setTarget(s.target); setName(s.announceName); setAllowlist(s.modelAllowlist.join(", ")) } }catch{ setStatus(undefined) } },[api])
+ useEffect(()=>{ void load() },[load])
+ if(!status) return null
+ const approve=()=>({approved:true,approvedBy:"DeepSeek Harness web user"})
+ const present=status.backends.filter(b=>b.present)
+ const act=async(f:()=>Promise<ActionResult>)=>{ const r=await f(); setNotice(r.ok?r.message:r.error); await load() }
+ return <>
+  <div style={fieldRow}><div><div>Share models with the fleet</div><small style={{opacity:0.65}}>
+   {status.running?`Serving ${status.models.length} model${status.models.length===1?"":"s"} as ${status.announceName}`:status.configured?"Configured — applies on restart":"Off — models stay local"}
+   {present.length>0?` — detected: ${present.map(b=>b.name).join(", ")}`:" — no local backend detected"}</small></div></div>
+  {status.running&&status.models.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>{status.models.slice(0,12).map(m=><code key={m} style={{fontSize:11,padding:"2px 6px",border:"1px solid var(--border,#444)",borderRadius:6}}>{m}</code>)}{status.models.length>12&&<small style={{opacity:0.65}}>+{status.models.length-12} more</small>}</div>}
+  <div style={fieldRow}><div><div>Backend</div><small style={{opacity:0.65}}>OpenAI-compatible endpoint to gate (auto = detect)</small></div>
+   <select style={textInput} value={target} onChange={e=>setTarget(e.target.value)}>
+    <option value="auto">Auto — detect local backend</option>
+    {present.map(b=><option key={b.url} value={b.url}>{b.name} — {b.url}</option>)}
+    {target!=="auto"&&!present.some(b=>b.url===target)&&<option value={target}>{target} (configured)</option>}
+   </select></div>
+  <div style={fieldRow}><div><div>Mesh name</div><small style={{opacity:0.65}}>Fleet-wide service name for these models</small></div>
+   <input style={textInput} value={name} onChange={e=>setName(e.target.value)}/></div>
+  <div style={fieldRow}><div><div>Model allowlist</div><small style={{opacity:0.65}}>Comma-separated; empty = everything the backend offers</small></div>
+   <input style={textInput} value={allowlist} placeholder="gemma-4-12b, qwen3.8-27b-int8" onChange={e=>setAllowlist(e.target.value)}/></div>
+  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+   <button style={button} onClick={()=>void act(()=>api.inferenceServeConfigure({enabled:true,target,announceName:name,modelAllowlist:allowlist.split(",").map(s=>s.trim()).filter(Boolean)},approve()))}>{status.configured?"Update serve row":"Start sharing"}</button>
+   {status.configured&&<button style={button} onClick={()=>void act(()=>api.inferenceServeConfigure({enabled:false},approve()))}>Stop sharing</button>}
+   {notice&&<small style={{opacity:0.75}}>{notice}</small>}
+  </div>
+ </>
+}
+
+function MeshConfigCard({scope,api}:{scope:SettingsScope<MeshSettingsSection>;api?:MeshWebApi}) {
  const snap=useSyncExternalStore(scope.subscribe,()=>scope.getSnapshot())
  if(snap.status==="unavailable") return null
  if(snap.status==="loading"||!snap.value) return <section style={box}><header><h3 style={{margin:0}}>Agent Mesh</h3><small>Loading settings…</small></header></section>
@@ -199,6 +237,7 @@ export function MeshConfigCard({scope,api}:{scope:SettingsScope<MeshSettingsSect
  <Toggle label="Stop node with dsh" hint="When dsh started the node, stop it on dsh shutdown (live)" value={v.stopNodeOnExit??true} onChange={x=>set("stopNodeOnExit",x)}/>
  <TextField label="Control plane" hint="Mesh to join at enrollment (live)" value={v.nodeControlPlane??""} placeholder="https://hub.sam-mesh.dev" onChange={x=>set("nodeControlPlane",x)}/>
  {api&&<BinaryField api={api} value={v.nodeBinary??""} onChange={x=>set("nodeBinary",x)}/>}
+ {api&&<ServeSection api={api}/>}
  <TextField label="Enrollment credential ref" hint="Managed-store reference for pre-shared (unattended) enrollment; empty = browser flow (live)" value={v.nodeEnrollmentCredentialRef??""} placeholder="SAM_MESH_BOOTSTRAP" onChange={x=>set("nodeEnrollmentCredentialRef",x)}/>
  <TextField label="Node TCP URL" hint="Local node fallback endpoint (restart)" value={v.tcpUrl??""} placeholder="http://127.0.0.1:8080" onChange={x=>set("tcpUrl",x)}/>
  <TextField label="Node socket" hint="Unix socket path, or 'false' for TCP only (restart)" value={String(v.socketPath??"")} placeholder="~/.config/sam-mesh/sam.sock" onChange={x=>set("socketPath",x==="false"?false:x)}/>

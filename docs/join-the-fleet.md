@@ -76,6 +76,16 @@ Carries the same payload as a sealed pairing, as a 0600 file. Move it by
 whatever channel you trust. Private-hub invites can embed a bootstrap token
 for unattended enrollment.
 
+## Serve your own models (optional, after pairing)
+
+In the Agent Mesh settings card: **Share models with the fleet** — the card
+detects local OpenAI-compatible backends (Ollama, LM Studio, llama.cpp,
+vLLM, LiteLLM), you pick one (or leave Auto), name the service, optionally
+restrict which models are shared, and select Start sharing. The card writes
+the serve row; restart dsh and your models appear in every fleet member's
+model picker under SAM Mesh — listing open, execution gated by the fleet
+capability you already hold.
+
 ## Security model (why strangers lose)
 
 - Discovery is public by design: the swarm can see the fleet's phone-book

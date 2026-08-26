@@ -37,10 +37,32 @@ export interface InferenceProxyOptions {
   /** Fleet capability required on gated paths: a static value or a getter read PER REQUEST
    *  (rotation-safe). Empty string disables the gate (requires explicit opt-in at the CLI). */
   requiredCapability: string | (() => string)
+  /** Curate which backend models the mesh may see and run. Empty/absent = everything.
+   *  Filtered from /v1/models AND enforced on execution (uniform 404). */
+  modelAllowlist?: string[] | (() => string[])
   onLog?: (line: string) => void
 }
 
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authorization', 'proxy-authenticate', 'host'])
+
+function allowlistOf(options: InferenceProxyOptions): string[] | undefined {
+  const list = typeof options.modelAllowlist === 'function' ? options.modelAllowlist() : options.modelAllowlist
+  return list && list.length > 0 ? list : undefined
+}
+
+/** Model named by a chat/completions request body; undefined when unreadable. */
+export function requestModel(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const model = (body as { model?: unknown }).model
+  return typeof model === 'string' && model !== '' ? model : undefined
+}
+
+/** Listing payload with disallowed models removed; undefined when the body is not a model list. */
+export function filterModelList(body: unknown, allowlist: string[]): unknown {
+  if (typeof body !== 'object' || body === null || !Array.isArray((body as { data?: unknown }).data)) return undefined
+  const data = (body as { data: Array<{ id?: unknown }> }).data.filter(m => typeof m.id === 'string' && allowlist.includes(m.id))
+  return { ...(body as Record<string, unknown>), data }
+}
 
 export function createInferenceProxyServer(options: InferenceProxyOptions): Server {
   const target = new URL(options.target)
@@ -54,29 +76,72 @@ export function createInferenceProxyServer(options: InferenceProxyOptions): Serv
       res.end(JSON.stringify({ error: { message: 'fleet capability required', type: 'capability_required' } }))
       return
     }
-    const headers: Record<string, string> = {}
-    for (const [key, value] of Object.entries(req.headers)) {
-      const lower = key.toLowerCase()
-      if (HOP_BY_HOP.has(lower) || lower === 'x-fleet-capability' || lower === 'authorization') continue
-      if (typeof value === 'string') headers[lower] = value
-    }
-    if (options.upstreamAuth) headers['authorization'] = `Bearer ${options.upstreamAuth}`
-    const upstream = httpRequest({
-      hostname: target.hostname,
-      port: target.port,
-      method: req.method,
-      path: url.pathname + url.search,
-      headers,
-    }, (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers as Record<string, string>)
-      upstreamRes.pipe(res)
+    const allowlist = allowlistOf(options)
+    const filterListing = allowlist !== undefined && gate === 'open'
+    const enforceExecution = allowlist !== undefined && gate === 'gated' && (req.method ?? '').toUpperCase() === 'POST'
+    void (async (): Promise<void> => {
+      let body: Buffer | undefined
+      if (filterListing || enforceExecution) {
+        const chunks: Buffer[] = []
+        for await (const chunk of req) chunks.push(chunk as Buffer)
+        body = Buffer.concat(chunks)
+        if (enforceExecution && body.length > 0) {
+          let parsed: unknown
+          try { parsed = JSON.parse(body.toString('utf8')) } catch { parsed = undefined }
+          const model = requestModel(parsed)
+          if (model !== undefined && !allowlist.includes(model)) {
+            res.writeHead(404, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: { message: 'model not available through this gate', type: 'model_not_available' } }))
+            return
+          }
+        }
+      }
+      const headers: Record<string, string> = {}
+      for (const [key, value] of Object.entries(req.headers)) {
+        const lower = key.toLowerCase()
+        if (HOP_BY_HOP.has(lower) || lower === 'x-fleet-capability' || lower === 'authorization') continue
+        if (body !== undefined && lower === 'content-length') continue
+        if (typeof value === 'string') headers[lower] = value
+      }
+      if (options.upstreamAuth) headers['authorization'] = `Bearer ${options.upstreamAuth}`
+      if (body !== undefined) headers['content-length'] = String(body.length)
+      const upstream = httpRequest({
+        hostname: target.hostname,
+        port: target.port,
+        method: req.method,
+        path: url.pathname + url.search,
+        headers,
+      }, (upstreamRes) => {
+        if (filterListing && (upstreamRes.statusCode ?? 500) === 200) {
+          const chunks: Buffer[] = []
+          upstreamRes.on('data', (c: Buffer) => chunks.push(c))
+          upstreamRes.on('end', () => {
+            let parsed: unknown
+            try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { parsed = undefined }
+            const filtered = parsed === undefined ? undefined : filterModelList(parsed, allowlist)
+            const out = filtered === undefined ? Buffer.concat(chunks) : Buffer.from(JSON.stringify(filtered))
+            const outHeaders = { ...(upstreamRes.headers as Record<string, string>) }
+            delete outHeaders['content-length']; delete outHeaders['content-encoding']; delete outHeaders['transfer-encoding']
+            res.writeHead(200, { ...outHeaders, 'content-type': 'application/json', 'content-length': String(out.length) })
+            res.end(out)
+          })
+          return
+        }
+        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers as Record<string, string>)
+        upstreamRes.pipe(res)
+      })
+      upstream.on('error', (error) => {
+        log(`upstream error: ${error.message}`)
+        if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'inference backend unreachable', type: 'backend_unreachable' } }))
+      })
+      if (body !== undefined) upstream.end(body)
+      else req.pipe(upstream)
+    })().catch((error: unknown) => {
+      log(`proxy error: ${error instanceof Error ? error.message : String(error)}`)
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'gate proxy error', type: 'proxy_error' } }))
     })
-    upstream.on('error', (error) => {
-      log(`upstream error: ${error.message}`)
-      if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: { message: 'inference backend unreachable', type: 'backend_unreachable' } }))
-    })
-    req.pipe(upstream)
   })
 }
 

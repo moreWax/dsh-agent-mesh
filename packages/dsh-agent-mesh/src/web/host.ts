@@ -6,6 +6,8 @@ import { generatePairKeys, open } from "@morewax/sam-mesh"
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+export interface ServeStatusView { configured: boolean; target: string; port: number; announceName: string; modelAllowlist: string[]; running: boolean; models: string[]; backends: Array<{ name: string; url: string; present: boolean }> }
+export interface ServeConfigureRequest { enabled: boolean; target?: string; announceName?: string; modelAllowlist?: string[] }
 import { homedir } from "node:os"
 import { credentialRef } from "@deepseek-ai/dsh-credentials"
 import type { NodeOwnership } from "../index.js"
@@ -316,4 +318,41 @@ export class AgentMeshWebHost extends TypertRemoteService {
   @Remote("deviceFlowInstructions") async deviceFlowInstructions(): Promise<string[]> {
     return ["Open a terminal on the host running DeepSeek Harness.", "Run: sam-node enroll", "Open the verification URL printed by sam-node and enter its one-time code.", "Return here and select Check connection. Credentials and device codes are never accepted by this web page."]
   }
+
+  /** Serve-inference status: card dashboard. Ungated read. */
+  @Remote("inferenceServeStatus") async inferenceServeStatus(): Promise<ServeStatusView> {
+    const profile = process.env.DSH_PROFILE ?? "web"
+    const patchPath = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "profiles", profile, "cordis.patch.yml")
+    const existing = await readFile(patchPath, "utf8").catch(() => "")
+    const { readServeConfig, DEFAULT_SERVE_CONFIG } = await import("./serve-patch.js")
+    const config = readServeConfig(existing) ?? { ...DEFAULT_SERVE_CONFIG }
+    let running = false
+    let models: string[] = []
+    try {
+      const res = await fetch(`http://127.0.0.1:${config.port}/v1/models`, { signal: AbortSignal.timeout(1500) })
+      if (res.ok) { running = true; const body = await res.json() as { data?: Array<{ id?: unknown }> }; models = (body.data ?? []).flatMap(m => typeof m.id === "string" ? [m.id] : []) }
+    } catch { /* not serving right now */ }
+    const { WELL_KNOWN_BACKENDS, probeBackend } = await import("@morewax/sam-mesh/node")
+    const backends = await Promise.all(WELL_KNOWN_BACKENDS.map(async b => ({ ...b, present: await probeBackend(b).catch(() => false) })))
+    return { configured: readServeConfig(existing) !== null, target: config.target, port: config.port, announceName: config.announceName, modelAllowlist: config.modelAllowlist, running, models, backends }
+  }
+
+  /** Enable/update/disable the serve row. Writes the managed patch block; a restart applies it. */
+  @Remote("inferenceServeConfigure") async inferenceServeConfigure(request: ServeConfigureRequest, approval: ApprovedAction): Promise<ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    try {
+      const profile = process.env.DSH_PROFILE ?? "web"
+      const patchPath = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "profiles", profile, "cordis.patch.yml")
+      const existing = await readFile(patchPath, "utf8").catch(() => "")
+      const { readServeConfig, writeServeConfig, DEFAULT_SERVE_CONFIG } = await import("./serve-patch.js")
+      const current = readServeConfig(existing) ?? { ...DEFAULT_SERVE_CONFIG }
+      const next = request.enabled
+        ? { ...current, enabled: true, target: request.target?.trim() || current.target, announceName: request.announceName?.trim() || current.announceName, modelAllowlist: request.modelAllowlist ?? current.modelAllowlist }
+        : null
+      await mkdir(join(patchPath, ".."), { recursive: true })
+      await writeFile(patchPath, writeServeConfig(existing, next))
+      return { ok: true, message: request.enabled ? `Serve row written (${next?.target} as ${next?.announceName}) — restart dsh to apply` : "Serve row removed — restart dsh to apply", value: { restartRequired: true } }
+    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+  }
 }
+

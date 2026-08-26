@@ -275,6 +275,13 @@ export function fleetProfilePatch(invite: FleetInvite): string {
     capabilityCredentialRef: MESH_TASK_CAPABILITY
     modelsTtlMs: 30000
     timeoutMs: 30000
+- id: agent-mesh-tools
+  config:
+    intent: "fleet tasks on ${invite.serviceName}"
+    serviceName: ${invite.serviceName}
+    requiredLabelsAnyOf: []
+    refreshIntervalMs: 60000
+    failOnStartupError: false
 - id: agent-mesh-task-service
   config:
     host: 127.0.0.1

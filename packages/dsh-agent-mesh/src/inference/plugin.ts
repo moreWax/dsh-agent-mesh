@@ -25,6 +25,8 @@ export interface Config {
   announceIntervalMs?: number
   /** How often the gate capability is re-resolved (rotation window). */
   capabilityRefreshMs?: number
+  /** Curate which backend models the mesh may see and run. Empty = everything the backend advertises. */
+  modelAllowlist?: string[]
 }
 export const Config: z<Config> = z.object({
   target: z.string(),
@@ -36,6 +38,7 @@ export const Config: z<Config> = z.object({
   announceName: z.string().default('dsh-mesh-inference'),
   announceIntervalMs: z.number().min(1000).default(30_000),
   capabilityRefreshMs: z.number().min(1000).default(60_000),
+  modelAllowlist: z.array(z.string()).default([]),
 }) as unknown as z<Config>
 
 type ServeContext = Context & { agentMesh: AgentMeshService }
@@ -76,6 +79,7 @@ export async function apply(ctx: ServeContext, config: Config = {}): Promise<voi
     host, port, target,
     ...(upstreamAuth ? { upstreamAuth } : {}),
     requiredCapability: () => capability,
+    ...(config.modelAllowlist?.length ? { modelAllowlist: config.modelAllowlist } : {}),
     onLog: log,
   })
   const refreshTimer = setInterval(() => void refresh(), config.capabilityRefreshMs ?? 60_000)
