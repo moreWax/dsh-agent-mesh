@@ -11,6 +11,7 @@
     "./tasks": "./lib/tasks/index.js",
     "./operator": "./lib/operator/index.js",
     "./llm": "./lib/llm/index.js",
+    "./inference/serve": "./lib/inference/plugin.js",
     "./providers": "./lib/providers/index.js",
     "./providers/tools": "./lib/providers/tools-plugin.js",
     "./tasks/service": "./lib/tasks/plugin.js",

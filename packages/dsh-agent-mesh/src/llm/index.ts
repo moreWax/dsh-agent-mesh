@@ -11,7 +11,7 @@ import { SamInferenceClient, type ChatCompletionChunk, type ChatMessage, type In
 import { SamHttpError, SamTransportError } from '@morewax/sam-mesh'
 
 export const name = 'agent-mesh-llm'
-export const inject = ['llm', 'credentials']
+export const inject = ['llm', 'credentials', 'agentMesh']
 export const PROVIDER = 'sam-mesh'
 
 export interface Config {
@@ -179,7 +179,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
     ...(config.nodeCredentialRef !== undefined ? { resolveNodeToken: async () => (await ctx.credentials.resolve(credentialRef(config.nodeCredentialRef!)))?.value } : {}),
   })
-  const ref = config.capabilityCredentialRef
-  const resolveCapability = ref ? async () => (await ctx.credentials.resolve(credentialRef(ref)))?.value : undefined
+  // Capability source: the row's own ref wins; otherwise fall back to the
+  // agent-mesh row's callCapabilityRef (the fleet patch sets exactly one ref
+  // for everything outgoing) — fleet members get gated mesh inference with
+  // ZERO extra config.
+  const ref = config.capabilityCredentialRef?.trim()
+  const resolveCapability = ref
+    ? async () => (await ctx.credentials.resolve(credentialRef(ref)))?.value
+    : ctx.agentMesh?.resolveCallCapability
   ctx.llm.registerAdapter([PROVIDER], new SamLlmAdapter(new SamInferenceClient(core), config, resolveCapability))
 }

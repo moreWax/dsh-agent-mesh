@@ -17,7 +17,7 @@ const CLIENT_EXTERNALS = new Set([
 ])
 
 const nodeHalf: UserConfig = {
-  entry: ["src/index.ts", "src/client/index.tsx", "src/remote.ts", "src/typert.host.ts", "src/cli/index.ts", "src/tools/index.ts", "src/inference/index.ts", "src/tasks/index.ts", "src/tasks/plugin.ts", "src/tasks/sqlite.ts", "src/tasks/dsh-executor.ts", "src/operator/index.ts", "src/providers/index.ts", "src/providers/tools-plugin.ts", "src/llm/index.ts"],
+  entry: ["src/index.ts", "src/client/index.tsx", "src/remote.ts", "src/typert.host.ts", "src/cli/index.ts", "src/tools/index.ts", "src/inference/index.ts", "src/tasks/index.ts", "src/tasks/plugin.ts", "src/tasks/sqlite.ts", "src/tasks/dsh-executor.ts", "src/operator/index.ts", "src/providers/index.ts", "src/providers/tools-plugin.ts", "src/llm/index.ts", "src/inference/plugin.ts"],
   format: 'esm',
   dts: true,
   outDir: 'lib',

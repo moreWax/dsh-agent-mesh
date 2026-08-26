@@ -39,7 +39,9 @@ export const Config: z<Config> = z.object({
   callCapabilityRef: z.string().default(''),
 }) as unknown as z<Config>
 
-export interface AgentMeshService { core: SamClient; tools: SamToolClient; inference: SamInferenceClient; operator: SamOperator }
+export interface AgentMeshService { core: SamClient; tools: SamToolClient; inference: SamInferenceClient; operator: SamOperator
+  /** Resolves the fleet capability for OUTGOING gated calls (per call, rotation-safe). Undefined when unconfigured. */
+  resolveCallCapability?: () => Promise<string | undefined> }
 class CordisMeshStatus implements AgentMeshStatusService {
   constructor(private readonly operator: SamOperator) {}
   status(signal?: AbortSignal): Promise<MeshCheckup> { return this.operator.checkup(signal) }
@@ -145,7 +147,8 @@ export function apply(ctx: Context, input: Config): void {
   // PER CALL from the managed store — a capability provisioned through the
   // web join flow takes effect immediately, no restart.
   const callRef = config.callCapabilityRef?.trim()
-  const service = { core, tools: new SamToolClient(core, callRef ? { resolveCapability: async () => (await ctx.credentials.resolve(credentialRef(callRef)).catch(() => undefined))?.value } : {}), inference: new SamInferenceClient(core), operator }
+  const resolveCallCapability = callRef ? async () => (await ctx.credentials.resolve(credentialRef(callRef)).catch(() => undefined))?.value : undefined
+  const service: AgentMeshService = { core, tools: new SamToolClient(core, resolveCallCapability ? { resolveCapability: resolveCallCapability } : {}), inference: new SamInferenceClient(core), operator, ...(resolveCallCapability ? { resolveCallCapability } : {}) }
   ctx.provide("agentMesh", service)
   // The agent-mesh settings namespace: row config is the composition base,
   // user edits from Settings → Plugins persist to settings.yaml and layer on

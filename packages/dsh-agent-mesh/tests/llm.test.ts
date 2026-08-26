@@ -57,3 +57,31 @@ describe('fleet capability injection', () => {
     expect((api.chat.mock.calls[1] as any[])[1].serviceHeaders['x-fleet-capability']).toBe('cap-b')
   })
 })
+
+
+describe('apply capability wiring', () => {
+  function mockCtx(capability?: string) {
+    const registered: unknown[] = []
+    const ctx = {
+      llm: { registerAdapter: vi.fn((_providers: string[], adapter: unknown) => { registered.push(adapter) }) },
+      credentials: { resolve: vi.fn(async () => ({ value: 'store-cap' })) },
+      agentMesh: capability !== undefined ? { resolveCallCapability: async () => capability } : {},
+    }
+    return { ctx, registered }
+  }
+  it('uses the row ref when set, falls back to agentMesh, else nothing', async () => {
+    const { apply: applyLlm } = await import('../src/llm/index.js')
+    // explicit ref wins
+    let { ctx, registered } = mockCtx('mesh-cap')
+    applyLlm(ctx as any, { capabilityCredentialRef: 'MY_REF' })
+    expect(await (registered[0] as any).resolveCapability()).toBe('store-cap')
+    // fallback to the agent-mesh row's callCapabilityRef
+    ;({ ctx, registered } = mockCtx('mesh-cap'))
+    applyLlm(ctx as any, {})
+    expect(await (registered[0] as any).resolveCapability()).toBe('mesh-cap')
+    // neither configured -> no capability sent
+    ;({ ctx, registered } = mockCtx(undefined))
+    applyLlm(ctx as any, {})
+    expect((registered[0] as any).resolveCapability).toBeUndefined()
+  })
+})

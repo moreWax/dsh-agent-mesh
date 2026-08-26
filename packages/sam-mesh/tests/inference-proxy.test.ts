@@ -90,3 +90,19 @@ describe('startAnnounceLoop', () => {
     expect(calls).toBeGreaterThan(1)
   })
 })
+
+
+describe('capability getter (rotation)', () => {
+  it('reads the capability per request, so rotation takes effect without a restart', async () => {
+    let current = 'cap-a'
+    const upstream = createServer((_req, res) => { res.writeHead(200); res.end('{}') })
+    const upstreamUrl = await listen(upstream)
+    const proxy = createInferenceProxyServer({ host: '127.0.0.1', port: 0, target: upstreamUrl, requiredCapability: () => current })
+    const proxyUrl = await listen(proxy)
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap-a' }, body: '{}' })).status).toBe(200)
+    current = 'cap-b'
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap-a' }, body: '{}' })).status).toBe(403)
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap-b' }, body: '{}' })).status).toBe(200)
+    proxy.close(); upstream.close()
+  })
+})

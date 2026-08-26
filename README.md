@@ -102,16 +102,45 @@ binary` prints the same list in a terminal, ★ = suggested.
 
 ## Mesh inference — serve your GPU models, pick them in dsh on any fleet machine
 
-Any machine can serve an OpenAI-compatible backend (vLLM, LiteLLM, Ollama, …)
-on the mesh behind the same capability gate as tasks. The **sam-mesh
-inference-proxy** sits on loopback between the node's announced service and
-the backend: model **listing is open** (the phone book), **execution is
-gated** — every other path requires the fleet capability in the
-`x-fleet-capability` header (timing-safe, uniform 403, the backend is never
-touched). The capability header and any inbound `Authorization` are stripped;
-the upstream credential is injected instead and never crosses the mesh.
+Any fleet machine can serve an OpenAI-compatible backend (vLLM, LiteLLM,
+Ollama, …) on the mesh behind the same capability gate as tasks. Model
+**listing is open** (the phone book); **execution is gated** — every
+completion requires the fleet capability (timing-safe, uniform 403, the
+backend is never touched). The gate strips the capability header and any
+inbound `Authorization`, and injects the upstream credential instead — it
+never crosses the mesh.
 
-Serve side (the machine with the models):
+**Consume side: zero steps.** The `agent-mesh-llm` row projects mesh models
+into dsh's model picker under the **sam-mesh** provider and resolves the
+fleet capability per call. With no config of its own it falls back to the
+`agent-mesh` row's `callCapabilityRef` — which the pairing flow already
+writes. Join the fleet, restart dsh, pick a mesh model. That's it.
+
+**Serve side: one opt-in row.** Add this to the profile patch
+(`~/.dsh/profiles/web/cordis.patch.yml`) on the machine with the backend —
+serving is always explicit, and new rows need the `insert` form (upsert only
+reconfigures rows the bundle already declares):
+
+```yaml
+- insert:
+    - id: agent-mesh-inference
+      name: '@morewax/dsh-agent-mesh/inference/serve'
+      config:
+        target: http://127.0.0.1:4001        # your OpenAI-compatible backend (REQUIRED)
+        port: 4100
+        upstreamAuthCredentialRef: MESH_INFERENCE_UPSTREAM_AUTH   # store ref, injected upstream
+        announceName: morewax-gpu-inference  # mesh-wide service name
+```
+
+No `capabilityCredentialRef` needed — the gate falls back to the same
+`callCapabilityRef` as everything else, re-resolved on a refresh interval
+(rotation-safe; empty means every execution 403s — fail closed). The row
+refuses non-loopback binds and refuses to start ungated without
+`allowUngated: true`. It self-announces and re-announces every 30s, so node
+restarts self-heal. dsh restarts take the proxy down with them — run dsh
+under a service manager for a permanent serve side.
+
+No dsh on the serving machine? The standalone CLI does the same job:
 
 ```bash
 export SAM_INFERENCE_UPSTREAM_AUTH=change-me-upstream-key
@@ -120,39 +149,7 @@ node packages/sam-mesh/lib/cli/index.mjs inference-proxy \
   --target http://127.0.0.1:4001 --port 4100 --announce-name morewax-gpu-inference
 ```
 
-The proxy refuses to run ungated without an explicit `--allow-ungated` and
-refuses non-loopback binds — the mesh is the only inbound path.
-`--announce-name` registers the service on the local node and re-announces
-every 30s, so node restarts self-heal. Run it under your service manager for
-a permanent serve side.
-
-Consume side (any fleet machine running dsh): the `agent-mesh-llm` row
-projects mesh models into dsh's model picker under the **sam-mesh** provider.
-Fleet members that joined after 2026-08-26 get the capability wiring from the
-pairing patch automatically; existing members add the ref to the profile
-patch (`~/.dsh/profiles/web/cordis.patch.yml`) — remember the patch REPLACES
-row config, so restate every key:
-
-```yaml
-- id: agent-mesh-llm
-  config:
-    socketPath: ~/.config/sam-mesh/sam.sock
-    tcpUrl: http://127.0.0.1:8080
-    preferSocket: true
-    nodeCredentialRef: SAM_NODE_AUTH
-    route:
-      mode: auto
-    requiredLabelsAnyOf: []
-    capabilityCredentialRef: MESH_TASK_CAPABILITY
-    modelsTtlMs: 30000
-    timeoutMs: 30000
-```
-
-Restart dsh, pick a mesh model in the model selector, chat. The request
-travels the mesh end-to-end encrypted; the serving machine's gate checks the
-capability and runs the completion on its own hardware.
-
-## CLI
+## CLI## CLI
 
 `sam-mesh` (or `npx @morewax/sam-mesh`) — action-routed, agent-friendly:
 

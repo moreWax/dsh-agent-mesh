@@ -34,8 +34,9 @@ export interface InferenceProxyOptions {
   target: string
   /** Bearer token injected as Authorization on every upstream request. */
   upstreamAuth?: string
-  /** Fleet capability required on gated paths. Empty string disables the gate (requires explicit opt-in at the CLI). */
-  requiredCapability: string
+  /** Fleet capability required on gated paths: a static value or a getter read PER REQUEST
+   *  (rotation-safe). Empty string disables the gate (requires explicit opt-in at the CLI). */
+  requiredCapability: string | (() => string)
   onLog?: (line: string) => void
 }
 
@@ -47,7 +48,8 @@ export function createInferenceProxyServer(options: InferenceProxyOptions): Serv
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://loopback')
     const gate = classifyGate(req.method ?? 'GET', url.pathname)
-    if (gate === 'gated' && !capabilityMatches(req.headers['x-fleet-capability'] as string | undefined, options.requiredCapability)) {
+    const required = typeof options.requiredCapability === 'function' ? options.requiredCapability() : options.requiredCapability
+    if (gate === 'gated' && !capabilityMatches(req.headers['x-fleet-capability'] as string | undefined, required)) {
       res.writeHead(403, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: { message: 'fleet capability required', type: 'capability_required' } }))
       return
