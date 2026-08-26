@@ -17,79 +17,16 @@
  * cannot be answered must never become a silent yes.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { delimiter, dirname, join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
-import { fileURLToPath } from 'node:url'
+import { findHarness, harnessBuilt, launchArgs, registerArgs, harnessCwd, HARNESS_CLI, HARNESS_REPO, ROOT, PLUGIN_DIR } from './harness.mjs'
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const HARNESS_REPO = 'https://github.com/deepseek-ai/deepseek-harness'
-const HARNESS_CLI = join('apps', 'cli', 'src', 'bin.ts')
 
 const say = (line = '') => process.stdout.write(`${line}\n`)
 const run = (cmd, args, cwd) => {
   say(`+ ${cmd} ${args.join(' ')}`)
   const r = spawnSync(cmd, args, { cwd, stdio: 'inherit' })
   if (r.status !== 0) throw new Error(`${cmd} exited with ${r.status}`)
-}
-
-/**
- * A harness find is either a CHECKOUT (we invoke bin.ts with node+tsx) or a
- * BIN on PATH (we invoke `dsh` directly). Detection order — explicit, PATH,
- * well-known spots, then a bounded scan of common dev roots. A directory
- * only counts if it LOOKS like the harness (bin.ts + a deepseek package
- * name); the scan stays at depth 2 so it is cheap and predictable.
- */
-function looksLikeHarness(dir) {
-  try {
-    if (!existsSync(join(dir, HARNESS_CLI))) return false
-    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
-    return /deepseek|harness/i.test(String(pkg.name ?? ''))
-  } catch { return false }
-}
-
-function findHarnessBin() {
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-    if (dir && existsSync(join(dir, 'dsh'))) return 'dsh'
-  }
-  return null
-}
-
-function findHarness() {
-  if (process.env.DSH_CHECKOUT && looksLikeHarness(process.env.DSH_CHECKOUT)) {
-    return { kind: 'checkout', dir: resolve(process.env.DSH_CHECKOUT) }
-  }
-  const bin = findHarnessBin()
-  if (bin) return { kind: 'bin', bin }
-  const home = homedir()
-  const direct = [
-    join(dirname(ROOT), 'deepseek-harness'),   // sibling checkout (README layout)
-    join(home, 'deepseek-harness'),
-    join(home, 'ds', 'deepseek-harness'),
-  ]
-  for (const dir of direct) if (looksLikeHarness(dir)) return { kind: 'checkout', dir }
-  // Bounded scan: any checkout-shaped directory (whatever its name) one or
-  // two levels under the usual development roots.
-  const roots = ['code', 'dev', 'src', 'projects', 'work', 'repos', 'git', 'Developer', 'ds']
-    .map(r => join(home, r)).filter(d => existsSync(d))
-  for (const root of roots) {
-    let children = []
-    try { children = readdirSync(root, { withFileTypes: true }) } catch { continue }
-    for (const child of children) {
-      if (!child.isDirectory()) continue
-      const dir = join(root, child.name)
-      if (looksLikeHarness(dir)) return { kind: 'checkout', dir }
-      let grandchildren = []
-      try { grandchildren = readdirSync(dir, { withFileTypes: true }) } catch { continue }
-      for (const grand of grandchildren) {
-        if (!grand.isDirectory()) continue
-        const nested = join(dir, grand.name)
-        if (looksLikeHarness(nested)) return { kind: 'checkout', dir: nested }
-      }
-    }
-  }
-  return null
 }
 
 async function ask(rl, question, fallbackYes = true) {
@@ -109,7 +46,8 @@ const manual = (harness) => {
   }
   say('  pnpm install && pnpm fetch:binaries && pnpm -r build')
   if (harness?.kind === 'checkout') say(`  cd ${harness.dir}   # tsx resolves from the harness's node_modules — run the next command from here`)
-  say(`  ${[...cliPrefix(harness), 'plugin', '--profile', 'web', 'add', `link:${join(ROOT, 'packages', 'dsh-agent-mesh')}`].join(' ')}`)
+  say(`  ${[...cliPrefix(harness), 'plugin', '--profile', 'web', 'add', `link:${PLUGIN_DIR}`].join(' ')}`)
+  say('  — then any time: pnpm start (rebuild + launch, browser opens itself)')
 }
 
 async function main() {
@@ -127,7 +65,7 @@ async function main() {
       // A checkout whose web bundle is missing is a checkout that was never
       // built (or whose build failed mid-way — a previous setup run, say).
       // Offer to finish it rather than sailing into a broken Web UI later.
-      if (harness.kind === 'checkout' && !existsSync(join(harness.dir, 'apps', 'web', 'dist'))) {
+      if (harness.kind === 'checkout' && !harnessBuilt(harness.dir)) {
         say('…but its build artifacts are missing (apps/web/dist) — it was never built or the build failed.')
         if (await ask(rl, 'Build the harness now? (pnpm build — the repo orchestrator builds libs before the web app)')) {
           run('pnpm', ['build'], harness.dir)
@@ -159,11 +97,11 @@ async function main() {
 
     // 5. register the plugin
     if (harness && await ask(rl, 'Register the plugin with the dsh web profile now?')) {
-      const [cmd, ...args] = [...cliPrefix(harness), 'plugin', '--profile', 'web', 'add', `link:${join(ROOT, 'packages', 'dsh-agent-mesh')}`]
+      const [cmd, ...args] = registerArgs(harness)
       // cwd MUST be the harness checkout: --import tsx/esm resolves tsx from
       // the current directory's node_modules, and tsx is the harness's
       // devDependency, not ours. (The link path stays absolute.)
-      run(cmd, args, harness.kind === 'checkout' ? harness.dir : ROOT)
+      run(cmd, args, harnessCwd(harness))
       say()
       say('Done. Start the Web UI and open Settings → Agent Mesh:')
       if (harness.kind === 'bin') {
@@ -178,12 +116,10 @@ async function main() {
       // the browser itself (its --no-open flag exists to suppress exactly
       // this). Ctrl+C stops the server and lands you back at your shell.
       if (await ask(rl, 'Start the Web UI now? (Ctrl+C stops it)')) {
-        const [scmd, ...sargs] = harness.kind === 'bin'
-          ? ['dsh', '--profile', 'web', '--port', '3080']
-          : ['node', '--import', 'tsx/esm', join(harness.dir, HARNESS_CLI), '--profile', 'web', '--port', '3080']
+        const [scmd, ...sargs] = launchArgs(harness)
         say()
         say('Starting the Web UI — the browser opens on its own. Go to Settings → Agent Mesh.')
-        spawnSync(scmd, sargs, { cwd: harness.kind === 'checkout' ? harness.dir : ROOT, stdio: 'inherit' })
+        spawnSync(scmd, sargs, { cwd: harnessCwd(harness), stdio: 'inherit' })
         say()
         say('Web UI stopped. To start it again:')
         if (harness.kind === 'bin') say('  dsh --profile web --port 3080')
