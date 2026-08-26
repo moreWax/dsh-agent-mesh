@@ -13,9 +13,14 @@ export class MeshOperator {
     const request = parseServiceRegistrationRequest(input)
     return this.core.request<ServiceRegistrationResponse | MeshService>("/sam/service/register", { method: "POST", body: { service: { name: request.name, type: request.protocol, ...(typeof request.metadata?.description === "string" ? { description: request.metadata.description } : {}) }, target_url: request.endpoint, ...(request.ttlSeconds !== undefined ? { ttl_seconds: request.ttlSeconds } : {}) }, ...(signal ? { signal } : {}) }).then((result) => "service" in result && result.service ? result.service : result as MeshService)
   }
-  recentLogs(query: LogQuery = {}, signal?: AbortSignal): Promise<readonly LogEntry[]> {
+  async recentLogs(query: LogQuery = {}, signal?: AbortSignal): Promise<readonly LogEntry[]> {
     if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 10_000)) throw new RangeError("log limit must be an integer from 1 to 10000")
-    return this.core.callTool<readonly LogEntry[]>("get_recent_logs", { ...query }, signal)
+    // The release alpha.7 get_recent_logs schema rejects unknown arguments
+    // (limit is a HEAD-era addition) — call arg-free and slice client-side so
+    // the probe works on every binary the package can carry.
+    const { limit, ...rest } = query
+    const logs = await this.core.callTool<readonly LogEntry[]>("get_recent_logs", rest, signal)
+    return limit === undefined ? logs : logs.slice(-limit)
   }
   tokenStatus(signal?: AbortSignal): Promise<TokenStatus> { return this.core.callTool<TokenStatus>("get_token_info", {}, signal) }
   connectivity(signal?: AbortSignal): Promise<Connectivity> { return this.core.callTool<Connectivity>("get_network_info", {}, signal) }
