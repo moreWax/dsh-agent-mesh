@@ -33,6 +33,8 @@ export const Config: z<Config> = z.object({
   nodeControlPlane: z.string(),
   /** Stop the node when dsh shuts down — but only if dsh started it. Default true. */
   stopNodeOnExit: z.boolean().default(true),
+  /** Publish RFC1918/ULA addresses to the mesh. Keep true on private/LAN hubs; set false on the public hub. Default true. */
+  nodeAnnouncePrivate: z.boolean().default(true),
 }) as unknown as z<Config>
 
 export interface AgentMeshService { core: SamClient; tools: SamToolClient; inference: SamInferenceClient; operator: SamOperator }
@@ -160,7 +162,7 @@ export function apply(ctx: Context, input: Config): void {
   }
 
   const dir = dataDirOf(config.socketPath)
-  const nodes = new SamNodeManager(dir ? { dataDir: dir } : {})
+  const nodes = new SamNodeManager({ ...(dir ? { dataDir: dir } : {}), announcePrivate: config.nodeAnnouncePrivate ?? true })
   const ownership: NodeOwnership = { startedByUs: false }
   new AgentMeshWebHost(ctx, service, nodes, ownership, settings, resolveEnrollmentToken, ensureNodeToken)
   ctx.provide("agentMeshStatus", new CordisMeshStatus(operator))

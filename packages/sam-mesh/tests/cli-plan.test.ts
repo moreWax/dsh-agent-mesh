@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildChecks, expandPeer, formatMintBlock, formatSshHandoff, nextJoinStep, parseWatch, renderDoctor, shortId } from '../src/cli/plan.js'
+import { buildChecks, expandPeer, formatMintBlock, formatSshHandoff, nextJoinStep, parseWatch, renderDoctor, shortId, withCapability } from '../src/cli/plan.js'
 
 describe('nextJoinStep', () => {
   it('offers install when the binary is missing — interactive or not', () => {
@@ -90,5 +90,18 @@ describe('parseWatch', () => {
   })
   it('tolerates garbage input', () => {
     expect(parseWatch(null)).toEqual({ status: undefined, cursor: undefined, terminal: false, events: [] })
+  })
+})
+
+describe('withCapability', () => {
+  it('injects the capability without mutating the original args', () => {
+    const args = { taskId: 't1' }
+    const out = withCapability(args, 'secret')
+    expect(out).toEqual({ taskId: 't1', _capability: 'secret' })
+    expect(args).toEqual({ taskId: 't1' })
+  })
+  it('passes args through untouched when no capability is configured', () => {
+    expect(withCapability({ a: 1 }, undefined)).toEqual({ a: 1 })
+    expect(withCapability({ a: 1 }, '')).toEqual({ a: 1 })
   })
 })

@@ -27,6 +27,12 @@ export interface SamNodeManagerOptions {
   dataDir?: string
   /** Default control plane for enrollment. */
   controlPlane?: string
+  /**
+   * Publish RFC1918/ULA addresses to the mesh. Upstream default is true
+   * (right for LAN/private hubs). Set false for public-hub posture.
+   * Undefined = upstream default.
+   */
+  announcePrivate?: boolean
 }
 
 export interface NodeStatus {
@@ -137,12 +143,14 @@ export class SamNodeManager {
   private readonly binary: string
   private readonly dataDir: string
   private readonly controlPlane: string
+  private readonly announcePrivate: boolean | undefined
   private readonly sessions = new Map<string, EnrollmentSession>()
 
   constructor(options: SamNodeManagerOptions = {}) {
     this.binary = options.samNode ?? 'sam-node'
     this.dataDir = options.dataDir ?? DEFAULT_DATA_DIR
     this.controlPlane = options.controlPlane ?? DEFAULT_CONTROL_PLANE
+    this.announcePrivate = options.announcePrivate
   }
 
   get socketPath(): string { return join(this.dataDir, 'sam.sock') }
@@ -201,7 +209,11 @@ export class SamNodeManager {
         await writeFile(tokenPath, options.apiToken, { mode: 0o600 })
         await chmod(tokenPath, 0o600)
       }
-      await execFileAsync(this.binary, ['run', '--daemonize', '--data-dir', this.dataDir], { timeout: 30_000 })
+      // Public-hub posture must NOT leak RFC1918/ULA addresses to the swarm
+      // (--announce-private defaults to true upstream, correct for LAN hubs).
+      const runArgs = ['run', '--daemonize', '--data-dir', this.dataDir]
+      if (this.announcePrivate !== undefined) runArgs.push(`--announce-private=${this.announcePrivate}`)
+      await execFileAsync(this.binary, runArgs, { timeout: 30_000 })
       return { ok: true, message: 'sam-node started' }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }

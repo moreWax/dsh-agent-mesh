@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import { TaskProtocolError, type JsonObject } from './types.js'
@@ -12,10 +13,24 @@ export const TASK_TOOL_SCHEMAS = Object.freeze({
   task_collect: { type: 'object', required: ['taskId'], properties: { taskId: { type: 'string', minLength: 1 }, deadline: { type: 'string', format: 'date-time' }, waitMs: { type: 'integer', minimum: 0 } }, additionalProperties: false },
 } as const)
 const descriptions: Record<string, string> = { task_submit: 'Submit an idempotent durable task', task_get: 'Get a task snapshot', task_watch: 'Long-poll task events from a cursor', task_cancel: 'Cancel queued or running task execution', task_collect: 'Wait for a terminal task snapshot' }
-export interface TaskHttpServerOptions { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; shutdownTimeoutMs?: number }
+export interface TaskHttpServerOptions { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; shutdownTimeoutMs?: number
+  /**
+   * Fleet capability: when set, tools/call requests must carry it in
+   * arguments._capability or the call is rejected before dispatch. This is
+   * the authorization boundary for a service announced on a PUBLIC hub —
+   * sam-node's pass-through has no caller authz, so the service brings its
+   * own. In-process callers (ctx.agentMeshTaskService) bypass HTTP entirely
+   * and are unaffected. initialize/tools/list stay open: the gate protects
+   * execution and data, not the existence of the tool roster.
+   */
+  capability?: string }
 export interface TaskHttpAddress { host: string; port: number; mcpUrl: string; healthUrl: string }
 function send(res: ServerResponse, status: number, body?: unknown, headers: Record<string,string> = {}): void { const data = body === undefined ? '' : JSON.stringify(body); res.writeHead(status, { ...(data ? { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(data)) } : {}), ...headers }); res.end(data) }
 async function body(req: IncomingMessage): Promise<unknown> { const chunks: Buffer[]=[]; let n=0; for await (const raw of req) { const c=Buffer.from(raw); n+=c.length; if(n>1024*1024) throw new Error('request body too large'); chunks.push(c) } return JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+function capabilityMatches(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented); const b = Buffer.from(expected)
+  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b)
+}
 function rpc(id: unknown, result: unknown) { return { jsonrpc: '2.0', id: id ?? null, result } }
 export class TaskHttpServer {
   private server: Server | undefined; private stopping: Promise<void> | undefined; private readonly path: string; private readonly healthPath: string
@@ -32,7 +47,20 @@ export class TaskHttpServer {
       if(msg.method==='initialize') result={protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:this.options.serviceName ?? 'dsh-task-service',version:'0.1.0'}}
       else if(msg.method==='ping') result={}
       else if(msg.method==='tools/list') result={tools:Object.entries(TASK_TOOL_SCHEMAS).map(([name,inputSchema])=>({name,description:descriptions[name],inputSchema}))}
-      else if(msg.method==='tools/call') { const name=msg.params?.name; if(typeof name!=='string') throw new TaskProtocolError({code:'TASK_PROTOCOL_INVALID_REQUEST',message:'tool name is required'}); const value=await this.tasks.callTool(name,(msg.params?.arguments ?? {}) as JsonObject,{signal:abort.signal}); result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value} }
+      else if(msg.method==='tools/call') {
+        const name=msg.params?.name; if(typeof name!=='string') throw new TaskProtocolError({code:'TASK_PROTOCOL_INVALID_REQUEST',message:'tool name is required'})
+        const args = { ...((msg.params?.arguments ?? {}) as JsonObject) }
+        if (this.options.capability !== undefined) {
+          const presented = typeof args._capability === 'string' ? args._capability : ''
+          delete args._capability
+          // Uniform rejection: missing and wrong capability are
+          // indistinguishable — no oracle about which part failed.
+          if (!capabilityMatches(presented, this.options.capability)) {
+            return send(res,200,{jsonrpc:'2.0',id:msg.id??null,error:{code:-32602,message:'capability required'}})
+          }
+        }
+        const value=await this.tasks.callTool(name,args,{signal:abort.signal}); result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}
+      }
       else return send(res,200,{jsonrpc:'2.0',id:msg.id??null,error:{code:-32601,message:'Method not found'}})
       return send(res,200,rpc(msg.id,result))
     } catch(e) { const err=e instanceof TaskProtocolError?e:{code:'TASK_INTERNAL_ERROR',message:e instanceof Error?e.message:String(e),retryable:false}; return send(res,200,rpc(msg.id,{content:[{type:'text',text:err.message}],structuredContent:{error:{code:err.code,message:err.message,retryable:err.retryable}},isError:true})) }

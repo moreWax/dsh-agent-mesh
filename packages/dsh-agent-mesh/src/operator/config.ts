@@ -52,5 +52,9 @@ export function parseAgentMeshConfig(value: AgentMeshConfigInput | unknown = {})
     if (typeof input.stopNodeOnExit !== "boolean") throw new TypeError("stopNodeOnExit must be boolean")
     result.stopNodeOnExit = input.stopNodeOnExit
   }
+  if (input.nodeAnnouncePrivate !== undefined) {
+    if (typeof input.nodeAnnouncePrivate !== "boolean") throw new TypeError("nodeAnnouncePrivate must be boolean")
+    result.nodeAnnouncePrivate = input.nodeAnnouncePrivate
+  }
   return Object.freeze(result)
 }

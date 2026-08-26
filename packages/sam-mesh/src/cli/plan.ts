@@ -163,3 +163,16 @@ export function parseWatch(payload: unknown): {
     events,
   }
 }
+
+// ─── service capability ────────────────────────────────────────────────────
+
+/**
+ * Inject a fleet capability into tool arguments. Gated services (e.g. our
+ * task-service on the public hub) reject calls without it; ungated services
+ * ignore the extra field. The capability travels inside arguments because
+ * sam-node's pass-through owns every other MCP message end-to-end.
+ */
+export function withCapability(args: Record<string, unknown>, capability: string | undefined): Record<string, unknown> {
+  if (!capability) return args
+  return { ...args, _capability: capability }
+}

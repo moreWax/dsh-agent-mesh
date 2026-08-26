@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -8,10 +10,10 @@ import { SQLiteTaskStore } from './sqlite.js'
 import { TaskHttpServer } from './http.js'
 import { SamTaskRegistrationClient } from './registration.js'
 export const name='agent-mesh-task-service'
-export const inject=['agentMesh']
-export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string }
+export const inject=['agentMesh','credentials']
+export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string }
 export const DEFAULT_TASK_DB = '~/.dsh/storages/agent-mesh-task-service/tasks.db'
-export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB)}) as unknown as z<Config>
+export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default('')}) as unknown as z<Config>
 declare module '@deepseek-ai/cordis' { interface Context { agentMeshTaskService: TaskService } }
 export const provide=['agentMeshTaskService']
 function resolveDbPath(value: string): string {
@@ -27,7 +29,22 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
   // home. ':memory:' opts back into ephemeral behavior (tests).
   const store = new SQLiteTaskStore(resolveDbPath(config.dbPath ?? DEFAULT_TASK_DB))
   const service=new TaskService(store,executor)
-  const server=new TaskHttpServer(service,config); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
+  // Capability gate (public-hub posture): when capabilityCredentialRef is
+  // configured, mesh calls must present the fleet secret. A configured ref
+  // that resolves to nothing fails CLOSED — an ephemeral per-boot secret no
+  // caller can match — because 'announced but unprotected' is never the
+  // intent of someone who set the ref.
+  let capability: string | undefined
+  const ref = config.capabilityCredentialRef?.trim() ?? ''
+  if (ref) {
+    const resolved = await ctx.credentials.resolve(credentialRef(ref)).catch(() => undefined)
+    if (resolved?.value) capability = resolved.value
+    else {
+      capability = randomBytes(32).toString('hex')
+      ctx.logger.warn(`capability ref '${ref}' is configured but empty — mesh calls to the task service will be REJECTED until the credential is provisioned (fail-closed)`)
+    }
+  }
+  const server=new TaskHttpServer(service,{...config,...(capability!==undefined?{capability}:{})}); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<SamTaskRegistrationClient['register']>>|undefined
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)
   let retryTimer:ReturnType<typeof setInterval>|undefined

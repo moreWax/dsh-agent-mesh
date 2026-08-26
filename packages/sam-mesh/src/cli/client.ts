@@ -18,7 +18,7 @@ import { join } from "node:path"
 import { homedir } from "node:os"
 import { stdout, stderr, exit } from "node:process"
 import { SamClient } from "../core/index.js"
-import { expandPeer, parseWatch, shortId } from "./plan.js"
+import { expandPeer, parseWatch, shortId, withCapability } from "./plan.js"
 
 function usage(): never {
   console.log(`Usage: dsh-agent-mesh <status|services|tools|models|call> [args]
@@ -70,6 +70,12 @@ async function resolvePeer(sam: SamClient, peerArg: string): Promise<string> {
     exit(2)
   }
   return match.peer
+}
+
+function readCapability(rest: string[]): string | undefined {
+  const i = rest.indexOf("--capability")
+  if (i >= 0 && rest[i + 1]) return rest[i + 1]
+  return process.env.SAM_MESH_CAPABILITY || undefined
 }
 
 export async function runClient(args: string[]): Promise<void> {
@@ -126,7 +132,7 @@ export async function runClient(args: string[]): Promise<void> {
           exit(2)
         }
       }
-      print(await sam.callRemoteTool({ peer_id: peer, tool_name: tool, arguments: parseJson(argsText, {}) }))
+      print(await sam.callRemoteTool({ peer_id: peer, tool_name: tool, arguments: withCapability(parseJson(argsText, {}), readCapability(rest)) }))
       return
     }
     case "tail": {
@@ -146,7 +152,7 @@ export async function runClient(args: string[]): Promise<void> {
       for (;;) {
         const res = await sam.callRemoteTool({
           peer_id: peer, tool_name: watchTool,
-          arguments: { taskId, waitMs: 2000, ...(cursor ? { cursor } : {}) },
+          arguments: withCapability({ taskId, waitMs: 2000, ...(cursor ? { cursor } : {}) }, readCapability(rest)),
         })
         const watch = parseWatch(res.structuredContent)
         for (const event of watch.events) stdout.write(`${JSON.stringify(event)}\n`)
