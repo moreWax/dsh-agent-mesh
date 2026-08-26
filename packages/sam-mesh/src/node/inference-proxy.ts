@@ -113,3 +113,41 @@ export function startAnnounceLoop(options: AnnounceOptions): () => void {
   void tick()
   return () => { stopped = true; if (timer) clearTimeout(timer) }
 }
+
+export interface BackendCandidate { name: string; url: string }
+
+/** Well-known loopback OpenAI-compatible backends, in priority order. */
+export const WELL_KNOWN_BACKENDS: BackendCandidate[] = [
+  { name: 'ollama', url: 'http://127.0.0.1:11434' },
+  { name: 'lm-studio', url: 'http://127.0.0.1:1234' },
+  { name: 'llama.cpp', url: 'http://127.0.0.1:8080' },
+  { name: 'vllm', url: 'http://127.0.0.1:8000' },
+  { name: 'litellm', url: 'http://127.0.0.1:4000' },
+  { name: 'litellm', url: 'http://127.0.0.1:4001' },
+]
+
+type ProbeFetch = (url: string, init?: { signal?: AbortSignal }) => Promise<{ status: number }>
+
+/** A backend is PRESENT when /v1/models answers at all — 200 (open) or 401/403
+ *  (auth-required; the row's upstreamAuthCredentialRef covers it). Anything
+ *  else (connection refused, 404, 5xx) counts as absent. */
+export async function probeBackend(candidate: BackendCandidate, fetchImpl: ProbeFetch = fetch as unknown as ProbeFetch, timeoutMs = 1000): Promise<boolean> {
+  try {
+    const res = await fetchImpl(`${candidate.url}/v1/models`, { signal: AbortSignal.timeout(timeoutMs) })
+    return res.status === 200 || res.status === 401 || res.status === 403
+  } catch { return false }
+}
+
+export interface AutoTargetResolution { target: string; found: BackendCandidate[]; ambiguous: boolean }
+
+/** Deterministic: the highest-priority present backend wins; `found` + `ambiguous`
+ *  let the caller log loudly when there was more than one choice. */
+export function resolveAutoTarget(present: BackendCandidate[]): AutoTargetResolution {
+  if (present.length === 0) throw new Error(`target auto found no OpenAI-compatible backend (probed: ${WELL_KNOWN_BACKENDS.map(b => `${b.name} ${b.url}`).join(', ')}). Start one, or set an explicit target.`)
+  return { target: present[0]!.url, found: present, ambiguous: present.length > 1 }
+}
+
+export async function detectInferenceBackends(candidates: BackendCandidate[] = WELL_KNOWN_BACKENDS, fetchImpl?: ProbeFetch): Promise<AutoTargetResolution> {
+  const present = (await Promise.all(candidates.map(async c => await probeBackend(c, fetchImpl) ? c : undefined))).filter((c): c is BackendCandidate => c !== undefined)
+  return resolveAutoTarget(present)
+}

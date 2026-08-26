@@ -29,8 +29,14 @@ import { runFleet } from './fleet.js'
 
 async function runInferenceProxy(args: string[]): Promise<void> {
   const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
-  const target = flag('--target')
-  if (!target) { stderr.write('Usage: sam-mesh inference-proxy --target <url> [--host 127.0.0.1] [--port 4100] [--announce-name <name>] [--allow-ungated]\n'); exit(2) }
+  let target = flag('--target')
+  if (!target) { stderr.write('Usage: sam-mesh inference-proxy --target <url|auto> [--host 127.0.0.1] [--port 4100] [--announce-name <name>] [--allow-ungated]\n'); exit(2) }
+  if (target === 'auto') {
+    const { detectInferenceBackends } = await import('../node/inference-proxy.js')
+    const auto = await detectInferenceBackends().catch((error: unknown) => { stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); exit(2) })
+    target = auto.target
+    stderr.write(`[inference-proxy] auto-detected backend: ${auto.found[0]!.name} at ${target}${auto.ambiguous ? ` (also found: ${auto.found.slice(1).map(b => `${b.name} ${b.url}`).join(', ')})` : ''}\n`)
+  }
   const host = flag('--host') ?? '127.0.0.1'
   const port = Number(flag('--port') ?? '4100')
   if (!Number.isInteger(port) || port < 1 || port > 65535) { stderr.write('--port must be an integer 1..65535\n'); exit(2) }

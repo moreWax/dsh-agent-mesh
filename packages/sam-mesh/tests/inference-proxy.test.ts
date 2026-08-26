@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { AddressInfo } from 'node:net'
-import { capabilityMatches, classifyGate, createInferenceProxyServer, startAnnounceLoop } from '../src/node/inference-proxy.js'
+import { capabilityMatches, classifyGate, createInferenceProxyServer, detectInferenceBackends, probeBackend, resolveAutoTarget, startAnnounceLoop, WELL_KNOWN_BACKENDS } from '../src/node/inference-proxy.js'
 
 describe('classifyGate', () => {
   it('opens only GET /v1/models', () => {
@@ -104,5 +104,38 @@ describe('capability getter (rotation)', () => {
     expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap-a' }, body: '{}' })).status).toBe(403)
     expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap-b' }, body: '{}' })).status).toBe(200)
     proxy.close(); upstream.close()
+  })
+})
+
+
+describe('backend auto-detection', () => {
+  it('counts 200 and 401/403 as present, everything else as absent', async () => {
+    const withStatus = (status: number) => (async () => ({ status })) as any
+    const c = { name: 'x', url: 'http://127.0.0.1:1' }
+    expect(await probeBackend(c, withStatus(200))).toBe(true)
+    expect(await probeBackend(c, withStatus(401))).toBe(true)
+    expect(await probeBackend(c, withStatus(403))).toBe(true)
+    expect(await probeBackend(c, withStatus(404))).toBe(false)
+    expect(await probeBackend(c, withStatus(500))).toBe(false)
+    expect(await probeBackend(c, (async () => { throw new Error('ECONNREFUSED') }) as any)).toBe(false)
+  })
+  it('resolves deterministically by priority and flags ambiguity', () => {
+    const one = resolveAutoTarget([WELL_KNOWN_BACKENDS[2]!])
+    expect(one).toMatchObject({ target: 'http://127.0.0.1:8080', ambiguous: false })
+    const multi = resolveAutoTarget([WELL_KNOWN_BACKENDS[0]!, WELL_KNOWN_BACKENDS[3]!])
+    expect(multi.target).toBe('http://127.0.0.1:11434')
+    expect(multi.ambiguous).toBe(true)
+    expect(multi.found.map(b => b.name)).toEqual(['ollama', 'vllm'])
+  })
+  it('throws a loud actionable error when nothing answers', () => {
+    expect(() => resolveAutoTarget([])).toThrow(/no OpenAI-compatible backend/)
+  })
+  it('detects live backends on injected candidates', async () => {
+    const alive = createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"data":[]}') })
+    const aliveUrl = await listen(alive)
+    const res = await detectInferenceBackends([{ name: 'fake', url: aliveUrl }, { name: 'dead', url: 'http://127.0.0.1:1' }])
+    expect(res).toMatchObject({ target: aliveUrl, ambiguous: false })
+    expect(res.found.map(b => b.name)).toEqual(['fake'])
+    alive.close()
   })
 })

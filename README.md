@@ -116,10 +116,29 @@ fleet capability per call. With no config of its own it falls back to the
 `agent-mesh` row's `callCapabilityRef` — which the pairing flow already
 writes. Join the fleet, restart dsh, pick a mesh model. That's it.
 
-**Serve side: one opt-in row.** Add this to the profile patch
-(`~/.dsh/profiles/web/cordis.patch.yml`) on the machine with the backend —
-serving is always explicit, and new rows need the `insert` form (upsert only
-reconfigures rows the bundle already declares):
+**Serve side: the standard is OpenAI `/v1`.** Any backend that answers
+`/v1/models` + `/v1/chat/completions` on a loopback port can be served —
+Ollama, LM Studio, llama.cpp, vLLM, LiteLLM. Two ways to point the row at
+one:
+
+*Easiest — auto-detect.* With `target: auto` the row probes the well-known
+backends (Ollama :11434, LM Studio :1234, llama.cpp :8080, vLLM :8000,
+LiteLLM :4000/:4001), picks deterministically, and logs what it found
+(including every other candidate, so you can pin explicitly when you run
+more than one). Someone whose whole "infrastructure" is Ollama on a laptop
+serves their models to the fleet with this one block:
+
+```yaml
+- insert:
+    - id: agent-mesh-inference
+      name: '@morewax/dsh-agent-mesh/inference/serve'
+      config:
+        target: auto
+        announceName: my-laptop-models
+```
+
+*Explicit — any endpoint.* Full control over target, port, upstream auth,
+and the mesh-wide name:
 
 ```yaml
 - insert:
@@ -132,13 +151,27 @@ reconfigures rows the bundle already declares):
         announceName: morewax-gpu-inference  # mesh-wide service name
 ```
 
-No `capabilityCredentialRef` needed — the gate falls back to the same
-`callCapabilityRef` as everything else, re-resolved on a refresh interval
-(rotation-safe; empty means every execution 403s — fail closed). The row
-refuses non-loopback binds and refuses to start ungated without
-`allowUngated: true`. It self-announces and re-announces every 30s, so node
-restarts self-heal. dsh restarts take the proxy down with them — run dsh
-under a service manager for a permanent serve side.
+Per-backend recipes for the explicit form — install the backend per its own
+docs, then use its loopback URL as `target`:
+
+| Backend | Serve command | `target` |
+| --- | --- | --- |
+| Ollama | `ollama serve` (runs by default) | `http://127.0.0.1:11434` |
+| LM Studio | start the local server in the app | `http://127.0.0.1:1234` |
+| llama.cpp | `llama-server -m model.gguf` | `http://127.0.0.1:8080` |
+| vLLM | `vllm serve <model>` | `http://127.0.0.1:8000` |
+| LiteLLM | `litellm --config config.yaml` | `http://127.0.0.1:4000` |
+
+Auth-bearing backends (LiteLLM, gated vLLM): put the key in the dsh
+credential store and set `upstreamAuthCredentialRef` — the gate injects it
+upstream and it never crosses the mesh. No `capabilityCredentialRef` needed
+in either form — the gate falls back to the fleet capability every member
+already holds, re-resolved on an interval (rotation-safe; empty means every
+execution 403s — fail closed). The row refuses non-loopback binds and
+refuses to start ungated without `allowUngated: true`. It self-announces and
+re-announces every 30s, so node restarts self-heal. dsh restarts take the
+proxy down with them — run dsh under a service manager for a permanent serve
+side.
 
 No dsh on the serving machine? The standalone CLI does the same job:
 

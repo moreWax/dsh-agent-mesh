@@ -41,7 +41,7 @@ export const Config: z<Config> = z.object({
 type ServeContext = Context & { agentMesh: AgentMeshService }
 
 export async function apply(ctx: ServeContext, config: Config = {}): Promise<void> {
-  if (!config.target) throw new Error('agent-mesh-inference requires config.target (the OpenAI-compatible backend to gate) — serving is always explicit')
+  if (!config.target) throw new Error("agent-mesh-inference requires config.target (the OpenAI-compatible backend to gate, or 'auto' to detect a local one) — serving is always explicit")
   const host = config.host ?? '127.0.0.1'
   if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') throw new Error(`agent-mesh-inference refuses non-loopback bind (${host}): the mesh is the only inbound path`)
   const port = config.port ?? 4100
@@ -63,17 +63,24 @@ export async function apply(ctx: ServeContext, config: Config = {}): Promise<voi
   const upstreamAuth = (await resolveUpstreamAuth?.()) ?? ''
 
   const log = (line: string): void => console.info(`[agent-mesh-inference] ${line}`)
+  let target = config.target
+  if (target === 'auto') {
+    const { detectInferenceBackends } = await import('@morewax/sam-mesh/node')
+    const auto = await detectInferenceBackends()
+    target = auto.target
+    log(`auto-detected backend: ${auto.found[0]!.name} at ${auto.target}${auto.ambiguous ? ` (also found: ${auto.found.slice(1).map(b => `${b.name} ${b.url}`).join(', ')} — set target explicitly to pin)` : ''}`)
+  }
   // The gate compares against the CURRENT value; the refresh interval bounds
   // the rotation window. Empty capability => every gated path 403s (fail closed).
   const server = createInferenceProxyServer({
-    host, port, target: config.target,
+    host, port, target,
     ...(upstreamAuth ? { upstreamAuth } : {}),
     requiredCapability: () => capability,
     onLog: log,
   })
   const refreshTimer = setInterval(() => void refresh(), config.capabilityRefreshMs ?? 60_000)
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve()) })
-  log(`gated proxy on http://${host}:${port} -> ${config.target} (${capability ? 'capability gate ON' : 'GATE OFF — allowed explicitly'})`)
+  log(`gated proxy on http://${host}:${port} -> ${target} (${capability ? 'capability gate ON' : 'GATE OFF — allowed explicitly'})`)
 
   let stopAnnounce: (() => void) | undefined
   if (config.announceName) {
