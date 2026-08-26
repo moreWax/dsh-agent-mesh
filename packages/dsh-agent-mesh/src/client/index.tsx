@@ -12,9 +12,9 @@ import type { ServiceRegistrationRequest, SkillInstallRequest } from "../operato
 import type { EnrollmentInfo } from "@morewax/sam-mesh/node"
 import type { DoctorCheck } from "@morewax/sam-mesh/plan"
 import type { NodeStatusView } from "../web/host.js"
-export interface MeshWebApi { snapshot():Promise<MeshDashboardSnapshot>; check():Promise<MeshDashboardSnapshot>; startNode(a:ApprovedAction):Promise<ActionResult>; installSkill(r:SkillInstallRequest,a:ApprovedAction):Promise<ActionResult>; registerService(r:ServiceRegistrationRequest,a:ApprovedAction):Promise<ActionResult>; deviceFlowInstructions():Promise<string[]>; nodeStatus():Promise<NodeStatusView>; stopNode(a:ApprovedAction):Promise<ActionResult>; beginEnrollment(a:ApprovedAction,o?:{controlPlane?:string}):Promise<EnrollmentInfo|ActionResult>; enrollmentStatus(id:string):Promise<EnrollmentInfo|null>; activeEnrollment():Promise<EnrollmentInfo|null>; cancelEnrollment(id:string):Promise<ActionResult>; meshDoctor():Promise<{checks:DoctorCheck[]}>; pairRequests():Promise<{pairing:boolean;pending:{requestId:string;label:string;requestedAt:number}[]}>; approvePairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; rejectPairRequest(id:string,a:ApprovedAction):Promise<ActionResult> }
+export interface MeshWebApi { snapshot():Promise<MeshDashboardSnapshot>; check():Promise<MeshDashboardSnapshot>; startNode(a:ApprovedAction):Promise<ActionResult>; installSkill(r:SkillInstallRequest,a:ApprovedAction):Promise<ActionResult>; registerService(r:ServiceRegistrationRequest,a:ApprovedAction):Promise<ActionResult>; deviceFlowInstructions():Promise<string[]>; nodeStatus():Promise<NodeStatusView>; stopNode(a:ApprovedAction):Promise<ActionResult>; beginEnrollment(a:ApprovedAction,o?:{controlPlane?:string}):Promise<EnrollmentInfo|ActionResult>; enrollmentStatus(id:string):Promise<EnrollmentInfo|null>; activeEnrollment():Promise<EnrollmentInfo|null>; cancelEnrollment(id:string):Promise<ActionResult>; meshDoctor():Promise<{checks:DoctorCheck[]}>; pairRequests():Promise<{pairing:boolean;pending:{requestId:string;label:string;requestedAt:number}[]}>; approvePairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; rejectPairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; fleetDiscover():Promise<{name:string;providers:number;peerIds:string[]}[]>; requestFleetPair(q:{serviceName:string;peerId?:string;label?:string},a:ApprovedAction):Promise<{sessionId?:string;ok:boolean;error?:string}>; fleetPairStatus(id:string):Promise<{state:string;fleet?:string;error?:string;notes?:string[]}> }
 function unwrap<T>(r:{ok:true;value:T}|{ok:false;error:{message:string}}):T { if(!r.ok) throw new Error(r.error.message); return r.value }
-export function createMeshWebApi(ctx:Context):MeshWebApi { const r=ctx.remote.agentMeshWeb; return {snapshot:async()=>unwrap(await r.snapshot()),check:async()=>unwrap(await r.check()),startNode:async a=>unwrap(await r.startNode(a)),installSkill:async(q,a)=>unwrap(await r.installSkill(q,a)),registerService:async(q,a)=>unwrap(await r.registerService(q,a)),deviceFlowInstructions:async()=>unwrap(await r.deviceFlowInstructions()),nodeStatus:async()=>unwrap(await r.nodeStatus()),stopNode:async a=>unwrap(await r.stopNode(a)),beginEnrollment:async(a,o)=>unwrap(await r.beginEnrollment(a,o)),enrollmentStatus:async id=>unwrap(await r.enrollmentStatus(id)),activeEnrollment:async()=>unwrap(await r.activeEnrollment()),cancelEnrollment:async id=>unwrap(await r.cancelEnrollment(id)),meshDoctor:async()=>unwrap(await r.meshDoctor()),pairRequests:async()=>unwrap(await r.pairRequests()),approvePairRequest:async(id,a)=>unwrap(await r.approvePairRequest(id,a)),rejectPairRequest:async(id,a)=>unwrap(await r.rejectPairRequest(id,a))} }
+export function createMeshWebApi(ctx:Context):MeshWebApi { const r=ctx.remote.agentMeshWeb; return {snapshot:async()=>unwrap(await r.snapshot()),check:async()=>unwrap(await r.check()),startNode:async a=>unwrap(await r.startNode(a)),installSkill:async(q,a)=>unwrap(await r.installSkill(q,a)),registerService:async(q,a)=>unwrap(await r.registerService(q,a)),deviceFlowInstructions:async()=>unwrap(await r.deviceFlowInstructions()),nodeStatus:async()=>unwrap(await r.nodeStatus()),stopNode:async a=>unwrap(await r.stopNode(a)),beginEnrollment:async(a,o)=>unwrap(await r.beginEnrollment(a,o)),enrollmentStatus:async id=>unwrap(await r.enrollmentStatus(id)),activeEnrollment:async()=>unwrap(await r.activeEnrollment()),cancelEnrollment:async id=>unwrap(await r.cancelEnrollment(id)),meshDoctor:async()=>unwrap(await r.meshDoctor()),pairRequests:async()=>unwrap(await r.pairRequests()),approvePairRequest:async(id,a)=>unwrap(await r.approvePairRequest(id,a)),rejectPairRequest:async(id,a)=>unwrap(await r.rejectPairRequest(id,a)),fleetDiscover:async()=>unwrap(await r.fleetDiscover()),requestFleetPair:async(q,a)=>unwrap(await r.requestFleetPair(q,a)),fleetPairStatus:async id=>unwrap(await r.fleetPairStatus(id))} }
 const box:React.CSSProperties={border:"1px solid var(--border,#444)",borderRadius:10,padding:16,display:"grid",gap:12}; const button:React.CSSProperties={padding:"7px 12px",borderRadius:6,cursor:"pointer"};
 function Json({value}:{value:unknown}) { return <pre style={{whiteSpace:"pre-wrap",maxHeight:220,overflow:"auto",fontSize:12}}>{JSON.stringify(value,null,2)}</pre> }
 export function MeshSettingsCard({api}:{api:MeshWebApi}) { const [s,setS]=useState<MeshDashboardSnapshot>(); const [error,setError]=useState(""); const [notice,setNotice]=useState(""); const load=useCallback(async()=>{setError("");try{setS(await api.snapshot())}catch(e){setError(e instanceof Error?e.message:String(e))}},[api]); useEffect(()=>{void load()},[load]);
@@ -54,6 +54,37 @@ function WizardSection({api}:{api:MeshWebApi}) {
 
 /** Fleet pairing approvals: join requests from machines that discovered this
  * fleet in the public swarm. The operator's human gate, in the browser. */
+
+type PairView = {sessionId:string;fleet:string;state:string;error?:string;notes?:string[]}
+
+/** Join a fleet FROM this machine, entirely in the browser: discover fleets
+ * in the swarm, request to pair, watch the operator's approval land. The
+ * host owns keys, polling, sealed-invite opening, and provisioning. */
+function JoinFleetSection({api}:{api:MeshWebApi}) {
+ const [fleets,setFleets]=useState<{name:string;providers:number;peerIds:string[]}[]>()
+ const [session,setSession]=useState<PairView>()
+ const [note,setNote]=useState("")
+ const discover=async()=>{ setNote(""); try{ setFleets(await api.fleetDiscover()) }catch(e){ setNote(e instanceof Error?e.message:String(e)) } }
+ useEffect(()=>{ if(!session||session.state!=="waiting") return
+  const t=setInterval(async()=>{ const s=await api.fleetPairStatus(session.sessionId); setSession({...session,...s}) },2000)
+  return ()=>clearInterval(t) },[session?.sessionId,session?.state])
+ const approve=()=>({approved:true,approvedBy:"DeepSeek Harness web user"})
+ const request=async(serviceName:string)=>{ const r=await api.requestFleetPair({serviceName},approve())
+  if(r.ok&&r.sessionId) setSession({sessionId:r.sessionId,fleet:serviceName,state:"waiting"}); else setNote(r.error??"request failed") }
+ return <div style={{border:"1px solid var(--border,#444)",borderRadius:8,padding:10}}>
+  <strong>Join a fleet</strong>{" "}<button style={button} onClick={()=>void discover()}>Discover fleets</button>
+  {note&&<p role="alert" style={{margin:"4px 0"}}>{note}</p>}
+  {session&&session.state==="waiting"&&<p style={{margin:"6px 0 0"}}>Waiting for an operator to approve your request to <code>{session.fleet}</code>… (they approve from their card or sam-mesh fleet approvals)</p>}
+  {session&&session.state==="complete"&&<div style={{margin:"6px 0 0"}}><p style={{margin:0}}>✓ You hold the <code>{session.fleet}</code> capability.</p><ul style={{margin:"4px 0 0",paddingLeft:18}}>{session.notes?.map((n,i)=><li key={i}><small>{n}</small></li>)}</ul></div>}
+  {session&&session.state==="failed"&&<p role="alert" style={{margin:"6px 0 0"}}>Pairing failed: {session.error}</p>}
+  {fleets&&fleets.length===0&&<p style={{margin:"6px 0 0",opacity:0.7}}>No fleets visible in the swarm.</p>}
+  {fleets&&fleets.length>0&&<ul style={{margin:"6px 0 0",paddingLeft:18,display:"grid",gap:4}}>
+   {fleets.map(f=><li key={f.name}><code>{f.name}</code>{" "}<small>{f.providers} provider{f.providers===1?"":"s"}</small>{" "}
+    <button style={button} disabled={session?.state==="waiting"} onClick={()=>void request(f.name)}>Request to join</button></li>)}
+  </ul>}
+ </div>
+}
+
 function PairingSection({api}:{api:MeshWebApi}) {
  const [state,setState]=useState<{pairing:boolean;pending:{requestId:string;label:string;requestedAt:number}[]}>()
  const [note,setNote]=useState("")
@@ -97,6 +128,7 @@ function NodeSection({api,onChanged}:{api:MeshWebApi;onChanged:()=>Promise<void>
   <div style={{display:"grid",gap:8,marginTop:8}}>
    <WizardSection api={api}/>
    <PairingSection api={api}/>
+   <JoinFleetSection api={api}/>
    <p style={{margin:0,opacity:0.75}}>{status.running?(status.managedByDsh?"Started by dsh — stops automatically when dsh stops.":"Running independently of dsh — use Stop node to shut it down."):status.enrolled?"Stopped — Start node brings it up (dsh-managed).":"Not enrolled."}</p>
    <dl style={{margin:0}}><dt>Binary</dt><dd>{status.installed?status.binaryPath:"sam-node not found on PATH"}</dd><dt>Data dir</dt><dd>{status.dataDir}</dd>{status.pid!==null&&<><dt>PID</dt><dd>{status.pid}</dd></>}</dl>
    <div>

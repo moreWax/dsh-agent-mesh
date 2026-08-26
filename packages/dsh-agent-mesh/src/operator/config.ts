@@ -56,5 +56,9 @@ export function parseAgentMeshConfig(value: AgentMeshConfigInput | unknown = {})
     if (typeof input.nodeAnnouncePrivate !== "boolean") throw new TypeError("nodeAnnouncePrivate must be boolean")
     result.nodeAnnouncePrivate = input.nodeAnnouncePrivate
   }
+  if (input.callCapabilityRef !== undefined) {
+    if (typeof input.callCapabilityRef !== "string") throw new TypeError("callCapabilityRef must be a string")
+    result.callCapabilityRef = input.callCapabilityRef
+  }
   return Object.freeze(result)
 }

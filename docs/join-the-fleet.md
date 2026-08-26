@@ -4,7 +4,22 @@ The fleet announces itself on the public mesh. A new machine discovers it,
 requests to pair, an operator approves, and the capability arrives sealed to
 the requester's ephemeral key — **no ssh, no files, no copied secrets**.
 
-## New machine (two commands)
+## Completely through the UI (dsh machines)
+
+On the NEW machine, with dsh + the plugin installed: **Settings → agent-mesh**
+
+1. **Enroll this machine** (Mesh node section) — device flow URL + code
+   appear in the card; approve in the browser. Node starts.
+2. **Join a fleet** section → **Discover fleets** → the fleet's service
+   name appears with its providers → **Request to join**.
+3. An operator approves (their card's Fleet pairing section, or CLI).
+4. The card shows ✓ — the capability is in the managed store **and takes
+   effect immediately** (agent calls to fleet services need no restart);
+   a profile patch is written so restarts keep the posture.
+
+No terminal, no files, no copied secrets — on either side.
+
+## New machine (CLI — two commands)
 
 ```bash
 git clone https://github.com/moreWax/dsh-agent-mesh && cd dsh-agent-mesh

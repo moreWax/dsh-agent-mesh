@@ -35,6 +35,8 @@ export const Config: z<Config> = z.object({
   stopNodeOnExit: z.boolean().default(true),
   /** Publish RFC1918/ULA addresses to the mesh. Keep true on private/LAN hubs; set false on the public hub. Default true. */
   nodeAnnouncePrivate: z.boolean().default(true),
+  /** Credential ref for the fleet capability injected into outgoing mesh calls (gated fleet services). Empty = no injection. */
+  callCapabilityRef: z.string().default(''),
 }) as unknown as z<Config>
 
 export interface AgentMeshService { core: SamClient; tools: SamToolClient; inference: SamInferenceClient; operator: SamOperator }
@@ -138,7 +140,12 @@ export function apply(ctx: Context, input: Config): void {
     : undefined
   const core = new SamClient({ ...(config.socketPath !== undefined ? { socketPath: config.socketPath } : {}), tcpUrl: config.tcpUrl, preferSocket: config.preferSocket, timeoutMs: config.timeoutMs, ...(resolveNodeToken ? { resolveNodeToken } : {}) })
   const operator = new SamOperator(core)
-  const service = { core, tools: new SamToolClient(core), inference: new SamInferenceClient(core), operator }
+  // Fleet capability for OUTGOING calls: agents calling gated fleet
+  // services present the same secret the fleet gate requires. Resolved
+  // PER CALL from the managed store — a capability provisioned through the
+  // web join flow takes effect immediately, no restart.
+  const callRef = config.callCapabilityRef?.trim()
+  const service = { core, tools: new SamToolClient(core, callRef ? { resolveCapability: async () => (await ctx.credentials.resolve(credentialRef(callRef)).catch(() => undefined))?.value } : {}), inference: new SamInferenceClient(core), operator }
   ctx.provide("agentMesh", service)
   // The agent-mesh settings namespace: row config is the composition base,
   // user edits from Settings → Plugins persist to settings.yaml and layer on

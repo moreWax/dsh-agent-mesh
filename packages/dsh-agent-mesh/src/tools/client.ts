@@ -22,7 +22,7 @@ export class ToolProtocolError extends ToolClientError { readonly code = 'PROTOC
 export class ToolNotFoundError extends ToolClientError { readonly code = 'TOOL_NOT_FOUND' }
 
 interface CachedSchema { value: ToolDescription; expiresAt: number }
-export interface ToolClientOptions { schemaTtlMs?: number; now?: () => number; observability?: MeshObservability }
+export interface ToolClientOptions { schemaTtlMs?: number; now?: () => number; /** Resolve the fleet capability per call — provisioning takes effect without a restart. */ resolveCapability?: () => Promise<string | undefined>; observability?: MeshObservability }
 
 type WireTool = {
   peer_id?: unknown; tool_name?: unknown; description?: unknown;
@@ -32,11 +32,13 @@ type WireTool = {
 export class ToolClient {
   readonly #cache = new Map<string, CachedSchema>()
   readonly #ttl: number
+  readonly #resolveCapability: (() => Promise<string | undefined>) | undefined
   readonly #now: () => number
   readonly #observability: MeshObservability
   constructor(readonly core: ToolClientCore, options: ToolClientOptions = {}) {
     this.#ttl = options.schemaTtlMs ?? 300_000
     this.#now = options.now ?? Date.now
+    this.#resolveCapability = options.resolveCapability
     this.#observability = options.observability ?? defaultObservability
   }
 

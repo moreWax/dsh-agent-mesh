@@ -1,7 +1,13 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { SamNodeManager, type EnrollmentInfo, type NodeStatus } from "@morewax/sam-mesh/node"
-import { buildChecks, type DoctorCheck } from "@morewax/sam-mesh/plan"
+import { buildChecks, decodeFleetInvite, mergeProfilePatch, fleetProfilePatch, type DoctorCheck, type FleetInvite } from "@morewax/sam-mesh/plan"
+import { generatePairKeys, open } from "@morewax/sam-mesh"
+import { randomBytes } from "node:crypto"
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { homedir } from "node:os"
+import { credentialRef } from "@deepseek-ai/dsh-credentials"
 import type { NodeOwnership } from "../index.js"
 import type { AgentMeshSettings } from "../settings.js"
 import type { Context } from "@deepseek-ai/cordis"
@@ -130,6 +136,105 @@ export class AgentMeshWebHost extends TypertRemoteService {
       if (enrolledCheck) enrolledCheck.detail = status.enrolledHub
     }
     return { checks }
+  }
+
+  // ─── join a fleet FROM this machine (the complete-UI path) ──────────────
+
+  private readonly pairSessions = new Map<string, { fleet: string; requestId: string; state: "waiting" | "complete" | "failed"; error?: string; notes?: string[]; privateKey: import("node:crypto").KeyObject; timer: ReturnType<typeof setInterval> }>()
+
+  /** Browse fleets in the swarm: service names with provider counts. Ungated read. */
+  @Remote("fleetDiscover") async fleetDiscover(): Promise<{ name: string; providers: number; peerIds: string[] }[]> {
+    const services = await this.mesh.core.discoverRemoteServices({ type: "mcp" })
+    const byName = new Map<string, string[]>()
+    for (const s of services) {
+      if (typeof s.srv_name !== "string" || typeof s.peer_id !== "string" || !s.srv_name || !s.peer_id) continue
+      byName.set(s.srv_name, [...(byName.get(s.srv_name) ?? []), s.peer_id])
+    }
+    return [...byName.entries()].map(([name, peerIds]) => ({ name, providers: peerIds.length, peerIds }))
+  }
+
+  /**
+   * Request to join a discovered fleet. The HOST owns the pairing session
+   * (ephemeral keypair, polling, sealed-invite opening, provisioning) — the
+   * card only watches status. Gated like enrollment: joining a fleet is an
+   * identity-relevant act.
+   */
+  @Remote("requestFleetPair") async requestFleetPair(request: { serviceName: string; peerId?: string; label?: string }, approval: ApprovedAction): Promise<{ sessionId?: string; ok: boolean; error?: string }> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const providers = (await this.mesh.core.discoverRemoteServices({ type: "mcp", name: request.serviceName })).filter(s => s.srv_name === request.serviceName)
+    const provider = request.peerId ? providers.find(p => p.peer_id === request.peerId || p.peer_id?.startsWith(request.peerId!)) : providers[0]
+    if (!provider?.peer_id) return { ok: false, error: providers.length === 0 ? `No provider of '${request.serviceName}' in the swarm` : `No provider matching '${request.peerId}'` }
+    const keys = generatePairKeys()
+    const requestId = randomBytes(16).toString("hex")
+    const sessionId = randomBytes(8).toString("hex")
+    const label = request.label?.trim() || `dsh@${(await import("node:os")).hostname()}`
+    try {
+      await this.mesh.core.callRemoteTool({ peer_id: provider.peer_id, tool_name: `mcp://${request.serviceName}/fleet_pair_request`, arguments: { requestId, publicKey: keys.publicKeyX, label } })
+    } catch (error) { return { ok: false, error: `pair request failed: ${error instanceof Error ? error.message : String(error)}` } }
+    const session = { fleet: request.serviceName, requestId, state: "waiting" as const, privateKey: keys.privateKey, timer: undefined as unknown as ReturnType<typeof setInterval> }
+    this.pairSessions.set(sessionId, session)
+    const startedAt = Date.now()
+    session.timer = setInterval(() => { void this.pollPairSession(sessionId, provider.peer_id!, startedAt) }, 2000)
+    return { ok: true, sessionId }
+  }
+
+  private async pollPairSession(sessionId: string, peerId: string, startedAt: number): Promise<void> {
+    const session = this.pairSessions.get(sessionId)
+    if (!session || session.state !== "waiting") return
+    if (Date.now() - startedAt > 10 * 60_000) return this.failPairSession(sessionId, "Timed out waiting for operator approval")
+    let poll: { state: string; sealed?: Parameters<typeof open>[0] }
+    try { poll = await this.mesh.core.callRemoteTool({ peer_id: peerId, tool_name: `mcp://${session.fleet}/fleet_pair_poll`, arguments: { requestId: session.requestId } }) as typeof poll }
+    catch { return } // transient mesh errors keep polling
+    if (poll.state === "unknown") return this.failPairSession(sessionId, "Request expired or was rejected")
+    if (poll.state !== "approved" || !poll.sealed) return
+    try {
+      const decoded = decodeFleetInvite(open(poll.sealed, session.privateKey))
+      if ("error" in decoded) return this.failPairSession(sessionId, `Approval carried an invalid invite: ${decoded.error}`)
+      const notes = await this.provisionFleetMembership(decoded)
+      session.state = "complete"; session.notes = notes
+    } catch (error) { return this.failPairSession(sessionId, `provisioning failed: ${error instanceof Error ? error.message : String(error)}`) }
+    clearInterval(session.timer)
+  }
+
+  private failPairSession(sessionId: string, error: string): void {
+    const session = this.pairSessions.get(sessionId)
+    if (!session) return
+    session.state = "failed"; session.error = error
+    clearInterval(session.timer)
+  }
+
+  /** What a fleet membership means for THIS dsh machine, applied in-process. */
+  private async provisionFleetMembership(invite: FleetInvite): Promise<string[]> {
+    const notes: string[] = []
+    // 1. managed credential store — the plugin's per-call resolver picks it
+    //    up IMMEDIATELY (agent calls to fleet services work, no restart).
+    await this.ctx.credentials.set(credentialRef("MESH_TASK_CAPABILITY"), invite.capability)
+    notes.push("fleet capability stored (managed store) — agent calls to fleet services work now")
+    // 2. CLI parity file for the standalone sam-mesh on this machine.
+    try {
+      const capPath = join(homedir(), ".config", "sam-mesh", "fleet-capability")
+      await mkdir(join(capPath, ".."), { recursive: true })
+      await writeFile(capPath, invite.capability, { mode: 0o600 }); await chmod(capPath, 0o600)
+      notes.push(`CLI parity: ${capPath} (0600)`)
+    } catch (error) { notes.push(`CLI parity file failed: ${error instanceof Error ? error.message : String(error)}`) }
+    // 3. profile patch so a RESTART keeps the posture (gate your own task
+    //    service with the same fleet capability).
+    try {
+      const profile = process.env.DSH_PROFILE ?? "web"
+      const patchPath = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "profiles", profile, "cordis.patch.yml")
+      const existing = await readFile(patchPath, "utf8").catch(() => null)
+      const merged = mergeProfilePatch(existing, invite)
+      if ("conflict" in merged) notes.push(merged.conflict)
+      else { await mkdir(join(patchPath, ".."), { recursive: true }); await writeFile(patchPath, merged.text); notes.push(`profile patch updated (${patchPath}) — restart dsh to gate your own task service`) }
+    } catch (error) { notes.push(`profile patch failed: ${error instanceof Error ? error.message : String(error)}`) }
+    return notes
+  }
+
+  /** Watch a pairing session. Ungated read. */
+  @Remote("fleetPairStatus") async fleetPairStatus(sessionId: string): Promise<{ state: string; fleet?: string; error?: string; notes?: string[] }> {
+    const session = this.pairSessions.get(sessionId)
+    if (!session) return { state: "unknown" }
+    return { state: session.state, fleet: session.fleet, ...(session.error ? { error: session.error } : {}), ...(session.notes ? { notes: session.notes } : {}) }
   }
 
   /** Pending fleet pair requests — the card's approval queue. Ungated read,
