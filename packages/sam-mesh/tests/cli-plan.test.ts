@@ -14,6 +14,19 @@ describe('nextJoinStep', () => {
   it('proceeds when installed and unenrolled', () => {
     expect(nextJoinStep({ installed: true, enrolled: false }, false)).toEqual({ action: 'join' })
   })
+
+  it('enrolled on a different hub than the join target is a switch-mesh, not a wall', () => {
+    const status = { installed: true, enrolled: true, enrolledHub: 'http://192.168.50.17:8480' }
+    expect(nextJoinStep(status, true, 'https://hub.sam-mesh.dev')).toEqual({
+      action: 'switch-mesh', from: 'http://192.168.50.17:8480', to: 'https://hub.sam-mesh.dev',
+    })
+  })
+
+  it('same hub (slash/case-insensitive) stays already-enrolled; no target or unknown hub keeps the wall', () => {
+    expect(nextJoinStep({ installed: true, enrolled: true, enrolledHub: 'https://hub.sam-mesh.dev/' }, true, 'https://HUB.sam-mesh.dev')).toEqual({ action: 'already-enrolled' })
+    expect(nextJoinStep({ installed: true, enrolled: true, enrolledHub: 'https://hub.sam-mesh.dev' }, true)).toEqual({ action: 'already-enrolled' })
+    expect(nextJoinStep({ installed: true, enrolled: true, enrolledHub: null }, true, 'https://hub.sam-mesh.dev')).toEqual({ action: 'already-enrolled' })
+  })
 })
 
 describe('formatMintBlock', () => {

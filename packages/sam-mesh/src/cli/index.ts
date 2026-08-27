@@ -204,8 +204,19 @@ async function runNode(args: string[]): Promise<void> {
       const tokenIndex = rest.indexOf('--bootstrap-token-path')
       const bootstrapTokenPath = tokenIndex >= 0 ? rest[tokenIndex + 1] : undefined
       const status = await nodes.status()
-      const step = nextJoinStep(status, interactive())
+      const step = nextJoinStep(status, interactive(), controlPlane)
       if (step.action === 'already-enrolled') { stderr.write(`This node already has an identity in ${step.dataDir ?? status.dataDir} (reset stays a deliberate terminal operation).\n`); exit(2) }
+      if (step.action === 'switch-mesh') {
+        if (!interactive()) { stderr.write(`Enrolled on ${step.from} but joining ${step.to} — switching meshes needs an interactive terminal.\n`); exit(2) }
+        if (!(await confirm(`This node is enrolled on ${step.from}. Switch to ${step.to}? The stored identity is replaced (PeerID kept).`))) {
+          stderr.write('Aborted — staying on the current mesh.\n'); exit(2)
+        }
+        const stopped = await nodes.stop()
+        if (!stopped.ok) { stderr.write(`could not stop the node: ${stopped.error}\n`); exit(1) }
+        const reset = await nodes.resetIdentity()
+        if (!reset.ok) { stderr.write(`could not reset the identity: ${reset.error}\n`); exit(1) }
+        stderr.write('Identity cleared (PeerID kept) — joining the new mesh.\n')
+      }
       if (step.action === 'install-offer') {
         if (!interactive()) { stderr.write(INSTALL_INSTRUCTION + '\n'); exit(2) }
         if (!(await confirm(`sam-node is not installed. Install it now with the official installer?`))) {

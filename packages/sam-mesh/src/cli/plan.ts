@@ -5,11 +5,12 @@
  * these own the decisions and the paste-ready output.
  */
 
-export interface JoinPrerequisites { installed: boolean; enrolled: boolean }
+export interface JoinPrerequisites { installed: boolean; enrolled: boolean; enrolledHub?: string | null }
 
 export type JoinStep =
   | { action: 'install-offer' }
   | { action: 'already-enrolled'; dataDir?: string }
+  | { action: 'switch-mesh'; from: string; to: string }
   | { action: 'join' }
 
 /**
@@ -17,11 +18,23 @@ export type JoinStep =
  * non-interactive contexts (CI, scripts) get an instruction instead of a
  * surprise network fetch — same decision, different presentation upstream.
  */
-export function nextJoinStep(status: JoinPrerequisites, interactive: boolean): JoinStep {
+export function nextJoinStep(status: JoinPrerequisites, interactive: boolean, targetHub?: string): JoinStep {
   if (!status.installed) return { action: 'install-offer' }
-  if (status.enrolled) return { action: 'already-enrolled' }
+  if (status.enrolled) {
+    // Enrolled on a DIFFERENT hub than the join target is a mesh switch,
+    // not 'already enrolled' — give it a path instead of a wall.
+    if (targetHub && status.enrolledHub && normalizeHub(status.enrolledHub) !== normalizeHub(targetHub)) {
+      return { action: 'switch-mesh', from: status.enrolledHub, to: targetHub }
+    }
+    return { action: 'already-enrolled' }
+  }
   void interactive
   return { action: 'join' }
+}
+
+/** Hub comparison ignores trailing slashes and case. */
+function normalizeHub(url: string): string {
+  return url.trim().replace(/\/+$/, '').toLowerCase()
 }
 
 /** What the CLI tells a non-interactive caller when sam-node is missing. */

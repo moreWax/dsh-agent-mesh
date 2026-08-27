@@ -252,12 +252,18 @@ async status(): Promise<NodeStatus> {
     }
   }
 
-  /** True when the last start failure looks like a stale-identity FATAL. */
+  /**
+   * True only when THIS start failure is the stale-identity FATAL. Match on
+   * 'fails role requirement' alone — the phrase is specific to the startup
+   * identity check; bare 'invalid signature' must NEVER trigger recovery
+   * (it appears constantly in routine AuthZ denies of other peers, and a
+   * false positive would reset a healthy identity).
+   */
   private async detectStaleIdentity(firstError: string): Promise<boolean> {
-    if (/fails role requirement|invalid signature/i.test(firstError)) return true
+    if (/fails role requirement/i.test(firstError)) return true
     try {
       const log = await readFile(join(this.dataDir, 'sam-node.log'), 'utf8')
-      return /fails role requirement|invalid signature/i.test(log.slice(-8192))
+      return /fails role requirement/i.test(log.slice(-8192))
     } catch {
       return false
     }
@@ -307,6 +313,23 @@ async status(): Promise<NodeStatus> {
       return { recovered: true }
     } catch (error) {
       return { recovered: false, reason: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * Clear the stored mesh identity (keeps the PeerID) so the node can join
+   * a different mesh. Deliberate and explicit — the CLI gates this behind an
+   * interactive confirmation; the card never exposes it. The node must be
+   * stopped first (sam-node refuses to touch a locked store).
+   */
+  async resetIdentity(): Promise<ActionResult> {
+    const before = await this.status()
+    if (before.running) return { ok: false, error: 'stop the node first (sam-mesh node stop) — sam-node will not reset a live store' }
+    try {
+      await execFileAsync(this.binary, ['reset', '--data-dir', this.dataDir], { timeout: 15_000 })
+      return { ok: true, message: 'mesh identity cleared (PeerID kept) — join any hub now' }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
   }
 

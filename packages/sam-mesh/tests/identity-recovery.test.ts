@@ -172,4 +172,34 @@ exit 1
     expect(result.error).not.toContain('automatic re-enrollment')
     expect(grantBody).toBe('')  // never touched the OIDC server
   })
+
+  it('routine AuthZ invalid-signature noise in the log never triggers recovery', async () => {
+    // exactly the Mac false-positive: hub unreachable, but the log tail is
+    // full of '[Auth] AuthZ Denied <peer>: biscuit: invalid signature' from
+    // other peers' traffic — recovery must not fire (it would reset a
+    // healthy identity)
+    const noisy = join(dir, 'sam-node-noisy')
+    await writeFile(noisy, `#!/bin/sh
+data_dir="$HOME/.config/sam-mesh"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--data-dir" ]; then data_dir="$2"; shift 2
+  else shift; fi
+done
+mkdir -p "$data_dir"
+echo "[Auth] AuthZ Denied 12D3KooW: biscuit: invalid signature" >> "$data_dir/sam-node.log"
+echo "failed to authenticate with any router: all connection attempts failed" >&2
+echo "FATAL Failed to start mesh node: failed to authenticate with any router" >> "$data_dir/sam-node.log"
+exit 1
+`, { mode: 0o755 })
+    const m = new TestManager({
+      refresh_token: 'stored-refresh-token',
+      oidc_issuer: oidcUrl,
+      oidc_client_id: 'sam-mesh-audience',
+    }, { samNode: noisy, dataDir: join(dir, 'data-noisy') })
+    const result = await m.start()
+    if (result.ok) throw new Error('expected failure')
+    expect(result.error).toContain('failed to authenticate')
+    expect(result.error).not.toContain('automatic re-enrollment')
+    expect(grantBody).toBe('')
+  })
 })
