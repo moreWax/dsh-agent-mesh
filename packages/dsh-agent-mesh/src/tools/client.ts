@@ -92,7 +92,14 @@ export class ToolClient {
     }
     const request: Record<string, unknown> = { peer_id: peerId, tool_name: identity.uri, arguments: arguments_ }
     const required = encodeRequiredLabels(options.requiredLabelsAnyOf)
-    const callRequest = { peer_id: peerId, tool_name: identity.uri, arguments: arguments_ as Record<string, unknown>, ...(required ? { required_labels: required } : {}) }
+    // Fleet capability: injected BELOW the dsh tool layer so it never lands
+    // in dsh's tool-call journal (the user-facing args stay clean), and the
+    // service edge strips it before handlers or schema validation see it —
+    // always-inject is safe even for open tools. resolveCapability runs per
+    // call so pairing/provisioning takes effect without a restart.
+    const capability = this.#resolveCapability ? await this.#resolveCapability() : undefined
+    const wireArgs = { ...arguments_ as Record<string, unknown>, ...(capability !== undefined ? { _capability: capability } : {}) }
+    const callRequest = { peer_id: peerId, tool_name: identity.uri, arguments: wireArgs, ...(required ? { required_labels: required } : {}) }
     try { return await this.core.callRemoteTool(callRequest, signal) as CallToolResult }
     catch (error) { throw mapToolError(error) }
   }
