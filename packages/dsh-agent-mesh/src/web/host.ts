@@ -303,6 +303,58 @@ export class AgentMeshWebHost extends TypertRemoteService {
       : { ok: false, error: "No such pending request (expired or already handled)" }
   }
 
+  /**
+   * Fleet administration FROM ANY PAIRED MACHINE: drive the fleet server's
+   * operator tools (fleet_pair_list/approve/reject — capability-gated at the
+   * service edge) through the mesh. The client no longer needs the server's
+   * UI to run the fleet; the capability is what proves operatorship, exactly
+   * as if the action were taken on the server itself. First pairing still
+   * bootstraps at the source (the capability has to originate somewhere).
+   */
+  @Remote("fleetAdminRequests") async fleetAdminRequests(request: { serviceName?: string; peerId?: string } = {}): Promise<{ ok: boolean; pending?: { requestId: string; label: string; requestedAt?: string }[]; error?: string }> {
+    const provider = await this.fleetAdminProvider(request)
+    if (typeof provider === "string") return { ok: false, error: provider }
+    try {
+      const result = await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_list`, arguments: { _capability: provider.capability } }) as { pending?: { requestId: string; label: string; requestedAt?: string }[] }
+      return { ok: true, pending: Array.isArray(result?.pending) ? result.pending : [] }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  @Remote("fleetAdminApprove") async fleetAdminApprove(request: { requestId: string; serviceName?: string; peerId?: string }, approval: ApprovedAction): Promise<ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const provider = await this.fleetAdminProvider(request)
+    if (typeof provider === "string") return { ok: false, error: provider }
+    try {
+      const result = await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_approve`, arguments: { _capability: provider.capability, requestId: request.requestId, approvedBy: approval.approvedBy.trim() } }) as { label?: string }
+      return { ok: true, message: `Approved '${result?.label ?? request.requestId}' on ${provider.service} — invite sealed and delivered` }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  @Remote("fleetAdminReject") async fleetAdminReject(request: { requestId: string; serviceName?: string; peerId?: string }, approval: ApprovedAction): Promise<ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const provider = await this.fleetAdminProvider(request)
+    if (typeof provider === "string") return { ok: false, error: provider }
+    try {
+      await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_reject`, arguments: { _capability: provider.capability, requestId: request.requestId } })
+      return { ok: true, message: "Request rejected" }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  /** Resolve the fleet provider + capability for admin calls; string = human error. */
+  private async fleetAdminProvider(request: { serviceName?: string; peerId?: string }): Promise<{ peerId: string; service: string; capability: string } | string> {
+    const capability = await this.mesh.resolveCallCapability?.()
+    if (!capability) return "fleet administration needs the fleet capability — pair this machine first (Agent Mesh card → Discover fleets)"
+    const services = await this.mesh.core.discoverRemoteServices({ type: "mcp", ...(request.serviceName ? { name: request.serviceName } : {}) })
+    const fleets = services.filter((s): s is typeof s & { srv_name: string; peer_id: string } => typeof s.srv_name === "string" && typeof s.peer_id === "string" && s.srv_name.length > 0 && s.peer_id.length > 0)
+    const service = request.serviceName ?? fleets[0]?.srv_name
+    if (!service) return "no fleet services visible in the swarm"
+    const provider = request.peerId
+      ? fleets.find(f => f.srv_name === service && (f.peer_id === request.peerId || f.peer_id.startsWith(request.peerId!)))
+      : fleets.find(f => f.srv_name === service)
+    if (!provider) return `no provider of '${service}' in the swarm`
+    return { peerId: provider.peer_id, service, capability }
+  }
+
   /** Lazy access: the task-service plugin may be unmounted or still booting. */
   private taskService(): import("../tasks/service.js").TaskService | undefined {
     try { return this.ctx.agentMeshTaskService } catch { return undefined }
