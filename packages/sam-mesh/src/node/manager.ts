@@ -9,7 +9,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { access, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { constants } from 'node:fs'
+import { chmodSync, constants, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createConnection } from 'node:net'
@@ -383,10 +383,14 @@ async status(): Promise<NodeStatus> {
 
   /** Write a credential file the manager owns: parent dir + 0600, value never logged. */
   private writeTokenFile(path: string, value: string): void {
-    void mkdir(this.dataDir, { recursive: true })
-      .then(() => writeFile(path, value, { mode: 0o600 }))
-      .then(() => chmod(path, 0o600))
-      .catch(() => { /* the join child fails on the missing file and the session reports it */ })
+    // SYNCHRONOUS on purpose: the enrollment child is spawned immediately
+    // after this returns, and an async write races it (the historical
+    // bootstrap-enroll flake — the stub/real join reads the file before it
+    // exists). Fail loudly instead: a token we cannot stage must not spawn
+    // a doomed child.
+    mkdirSync(this.dataDir, { recursive: true })
+    writeFileSync(path, value, { mode: 0o600 })
+    chmodSync(path, 0o600)
   }
 
   enrollment(sessionId: string): EnrollmentInfo | null {
