@@ -194,14 +194,20 @@ describe('mergeProfilePatch', () => {
 
 describe('buildChecks inference rows', () => {
   const base = { installed: true, enrolled: true, running: true, peerCount: 3, serviceCount: 1, localServiceCount: 1 }
-  it('runtime unavailable fails with a fix; store reports detail; serve rows map states', () => {
+  it('runtime unavailable fails only when a runtime-mode serve row needs it; store reports detail; serve rows map states', () => {
     const checks = buildChecks({ ...base, runtimeTag: null, modelStore: { count: 2, bytes: 3e9 }, serveRows: [
-      { name: 'good', state: 'serving' },
+      { name: 'good', state: 'serving', mode: 'runtime' },
       { name: 'loading', state: 'starting', detail: 'loading smol' },
       { name: 'broken', state: 'error', detail: 'port busy' },
     ] })
     expect(checks.find(c => c.name === 'vendored llama.cpp runtime')).toMatchObject({ ok: false })
-    expect(checks.find(c => c.name === 'vendored llama.cpp runtime')?.fix).toMatch(/reinstall/)
+    expect(checks.find(c => c.name === 'vendored llama.cpp runtime')?.fix).toMatch(/fetch:binaries/)
+    // consumer machine (no runtime rows): missing runtime is informational
+    const consumer = buildChecks({ ...base, runtimeTag: null, serveRows: [] })
+    expect(consumer.find(c => c.name === 'vendored llama.cpp runtime')).toMatchObject({ ok: true })
+    expect(consumer.find(c => c.name === 'vendored llama.cpp runtime')?.detail).toMatch(/only needed to serve/)
+    // consumer posture: zero announced services is not a failure either
+    expect(consumer.find(c => c.name === 'your services announced')).toMatchObject({ ok: true })
     expect(checks.find(c => c.name === 'model store')).toMatchObject({ ok: true, detail: '2 models, 3.0 GB' })
     expect(checks.find(c => c.name === "serve row 'good'")?.ok).toBe(true)
     expect(checks.find(c => c.name === "serve row 'loading'")?.fix).toMatch(/still loading/)

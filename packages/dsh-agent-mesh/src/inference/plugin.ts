@@ -75,7 +75,7 @@ export async function apply(ctx: ServeContext, config: Config = {}): Promise<voi
     const message = error instanceof Error ? error.message : String(error)
     console.error(`[agent-mesh-inference] DISABLED — ${message}`)
     const { writeServeStatus } = await import('@morewax/sam-mesh/node')
-    await writeServeStatus(dataDir, { state: 'error', name: statusName, detail: message }).catch(() => undefined)
+    await writeServeStatus(dataDir, { state: 'error', name: statusName, mode: (config as { model?: string }).model ? 'runtime' : 'external', detail: message }).catch(() => undefined)
   }
 }
 
@@ -139,14 +139,14 @@ async function applyInner(ctx: ServeContext, config: Config, statusName: string,
     // Background start: big models load for minutes — dsh boot must not wait.
     // The gate 502s until the backend is healthy; the status file tells the truth.
     const rt = runtime
-    await writeServeStatus(dataDir, { state: 'starting', name: statusName, detail: `loading ${alias} (llama.cpp ${vendored.tag})`, target }).catch(() => undefined)
+    await writeServeStatus(dataDir, { state: 'starting', name: statusName, mode: 'runtime', detail: `loading ${alias} (llama.cpp ${vendored.tag})`, target }).catch(() => undefined)
     void rt.start().then(async () => {
       log(`vendored llama.cpp ${vendored.tag} serving ${alias} on :${rc.port ?? 8180}`)
-      await writeServeStatus(dataDir, { state: 'serving', name: statusName, detail: `${alias} on llama.cpp ${vendored.tag}`, target, models: [alias] }).catch(() => undefined)
+      await writeServeStatus(dataDir, { state: 'serving', name: statusName, mode: 'runtime', detail: `${alias} on llama.cpp ${vendored.tag}`, target, models: [alias] }).catch(() => undefined)
     }).catch(async (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
       console.error(`[agent-mesh-inference:runtime] startup failed — ${message}`)
-      await writeServeStatus(dataDir, { state: 'error', name: statusName, detail: message, target }).catch(() => undefined)
+      await writeServeStatus(dataDir, { state: 'error', name: statusName, mode: 'external', detail: message, target }).catch(() => undefined)
     })
   }
   if (target === 'auto') {
@@ -170,7 +170,7 @@ async function applyInner(ctx: ServeContext, config: Config, statusName: string,
   log(`gated proxy on http://${host}:${port} -> ${target} (${capability ? 'capability gate ON' : 'GATE OFF — allowed explicitly'})`)
   if (!runtimeCfg) {
     const { writeServeStatus } = await import('@morewax/sam-mesh/node')
-    await writeServeStatus(dataDir, { state: 'serving', name: statusName, detail: `external backend ${target}`, target }).catch(() => undefined)
+    await writeServeStatus(dataDir, { state: 'serving', name: statusName, mode: 'external', detail: `external backend ${target}`, target }).catch(() => undefined)
   }
 
   let stopAnnounce: (() => void) | undefined

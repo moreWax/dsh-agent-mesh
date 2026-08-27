@@ -7,6 +7,8 @@ export interface ServeStatus {
   name: string
   detail?: string | undefined
   target?: string | undefined
+  /** runtime = vendored llama.cpp serving a local GGUF; external = an existing backend. */
+  mode?: 'runtime' | 'external' | undefined
   models?: string[] | undefined
   updatedAt: string
 }

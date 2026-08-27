@@ -78,7 +78,7 @@ export interface DoctorInputs {
   /** Model-store summary. */
   modelStore?: { count: number; bytes: number } | undefined
   /** Serve-row states from the status files (empty when none). */
-  serveRows?: Array<{ name: string; state: string; detail?: string | undefined }> | undefined
+  serveRows?: Array<{ name: string; state: string; detail?: string | undefined; mode?: 'runtime' | 'external' | undefined }> | undefined
 }
 
 /** Each failed check carries the exact next command — doctor is advice, not just status. */
@@ -98,9 +98,8 @@ export function buildChecks(input: DoctorInputs): DoctorCheck[] {
   })
   checks.push({
     name: 'your services announced',
-    ok: (input.localServiceCount ?? 0) > 0,
-    detail: `${input.localServiceCount ?? 0} registered locally`,
-    fix: (input.localServiceCount ?? 0) > 0 ? undefined : 'nothing wrong — machines can consume the mesh without announcing',
+    ok: true,
+    detail: `${input.localServiceCount ?? 0} registered locally${(input.localServiceCount ?? 0) === 0 ? ' — consumer posture, nothing wrong' : ''}`,
   })
   checks.push({
     name: 'remote services visible',
@@ -108,7 +107,15 @@ export function buildChecks(input: DoctorInputs): DoctorCheck[] {
     detail: `${input.serviceCount ?? 0} discoverable — strangers owe you nothing; a healthy consumer can see zero`,
   })
   if (input.runtimeTag !== undefined) {
-    checks.push({ name: 'vendored llama.cpp runtime', ok: input.runtimeTag !== null, fix: input.runtimeTag === null ? 'reinstall @morewax/sam-mesh with its platform packages (optionalDependencies), or serve an external backend' : undefined })
+    // The runtime is only REQUIRED when a serve row uses runtime mode; a
+    // consumer (or someone serving external backends) never needs it.
+    const needed = (input.serveRows ?? []).some(r => r.mode === 'runtime')
+    checks.push({
+      name: 'vendored llama.cpp runtime',
+      ok: input.runtimeTag !== null || !needed,
+      detail: input.runtimeTag ?? (needed ? 'MISSING — a serve row needs it' : 'not installed — only needed to serve local models'),
+      fix: input.runtimeTag === null && needed ? 'run pnpm fetch:binaries (repo) or reinstall @morewax/sam-mesh with its platform packages (optionalDependencies)' : undefined,
+    })
   }
   if (input.modelStore !== undefined) {
     checks.push({ name: 'model store', ok: true, fix: undefined, detail: `${input.modelStore.count} model${input.modelStore.count === 1 ? '' : 's'}, ${(input.modelStore.bytes / 1e9).toFixed(1)} GB` })

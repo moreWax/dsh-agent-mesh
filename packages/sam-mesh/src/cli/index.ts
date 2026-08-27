@@ -377,7 +377,7 @@ else if (command === 'doctor') {
   if (status.running && sam) { try { localServiceCount = (await sam.listLocalServices()).length } catch { localServiceCount = 0 } }
   let runtimeTag: string | null | undefined
   let modelStore: { count: number; bytes: number } | undefined
-  let serveRows: Array<{ name: string; state: string; detail?: string | undefined }> | undefined
+  let serveRows: Array<{ name: string; state: string; detail?: string | undefined; mode?: 'runtime' | 'external' | undefined }> | undefined
   try {
     const { resolveVendoredLlama, listModelStore, readServeStatuses } = await import('../node/index.js')
     const dataDir = process.env.SAM_DATA_DIR ?? `${process.env.HOME}/.config/sam-mesh`
