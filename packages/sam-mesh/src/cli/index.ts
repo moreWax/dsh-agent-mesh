@@ -187,6 +187,16 @@ async function runNode(args: string[]): Promise<void> {
       if (!result.ok) exit(1)
       return
     }
+    case 'recover': {
+      const recovery = await manager().recoverStaleIdentity()
+      if (recovery.recovered) {
+        print({ ok: true, message: 'identity self-healed via stored refresh token — node re-enrolled and started' })
+      } else {
+        print({ ok: false, error: `automatic re-enrollment failed (${recovery.reason}) — re-enroll: sam-mesh node join` })
+        exit(1)
+      }
+      return
+    }
     case 'join': {
       let controlPlane = process.env.SAM_CONTROL_PLANE ?? DEFAULT_CONTROL_PLANE
       const flagIndex = rest.indexOf('--control-plane')
@@ -244,7 +254,7 @@ async function runNode(args: string[]): Promise<void> {
       exit(session.state === 'cancelled' ? 130 : 1)
     }
     default:
-      stderr.write('Usage: sam-mesh node <status|install|start|stop|join> [--control-plane <url>] [--bootstrap-token-path <file>]\n')
+      stderr.write('Usage: sam-mesh node <status|install|start|stop|join|recover> [--control-plane <url>] [--bootstrap-token-path <file>]\n')
       exit(2)
   }
 }

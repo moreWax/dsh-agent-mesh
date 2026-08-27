@@ -20,7 +20,10 @@ npx @morewax/sam-mesh node join [--control-plane <url>]
 npx @morewax/sam-mesh node join --bootstrap-token-path <file>
                                                  # pre-shared-token enrollment (no browser step);
                                                  # the hub operator mints the token out of band
-npx @morewax/sam-mesh node start | node stop     # daemon lifecycle (idempotent)
+npx @morewax/sam-mesh node start | node stop     # daemon lifecycle (idempotent); start self-heals a
+                                                 # stale identity (hub key rotation) via the stored
+                                                 # OIDC refresh token — no browser unless the token died
+npx @morewax/sam-mesh node recover                 # force that self-heal by hand
 npx @morewax/sam-mesh node binary                  # every usable sam-node, ★ = suggested
 
 npx @morewax/sam-mesh doctor                     # am I on the mesh? every failure prints its fix

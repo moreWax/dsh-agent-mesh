@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { hasMeshIdentity, readEnrolledHub } from './bbolt.js'
+import { bboltGet, hasMeshIdentity, readEnrolledHub } from './bbolt.js'
 import { resolveBundledBinary } from './bundled.js'
 
 const execFileAsync = promisify(execFile)
@@ -219,10 +219,94 @@ async status(): Promise<NodeStatus> {
       // (--announce-private defaults to true upstream, correct for LAN hubs).
       const runArgs = ['run', '--daemonize', '--data-dir', this.dataDir]
       if (this.announcePrivate !== undefined) runArgs.push(`--announce-private=${this.announcePrivate}`)
-      await execFileAsync(this.binary, runArgs, { timeout: 30_000 })
+      await execFileAsync(this.binary, runArgs,
+        { timeout: 30_000 })
       return { ok: true, message: 'sam-node started' }
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      const first = error instanceof Error ? error.message : String(error)
+      // Stale-identity self-heal: the hub rotated its signing key (or the
+      // biscuit otherwise no longer verifies) — sam-node FATALs at Start()
+      // and upstream offers no recovery path. The store usually holds an
+      // OIDC refresh token (device flow with --offline-access), so a silent
+      // re-enrollment is possible: refresh the JWT, reset the stale identity
+      // (PeerID survives), re-join with the JWT. No browser unless the
+      // refresh token itself is dead.
+      if (await this.detectStaleIdentity(first)) {
+        const recovery = await this.recoverStaleIdentity()
+        if (recovery.recovered) {
+          return { ok: true, message: 'sam-node started (self-healed a stale identity via stored refresh token)' }
+        }
+        return { ok: false, error: `${first} — automatic re-enrollment failed (${recovery.reason}); re-enroll via the card or 'sam-mesh node join'` }
+      }
+      return { ok: false, error: first }
+    }
+  }
+
+  /** Read one string value from the identity bucket; null when absent/unreadable. */
+  protected async readStoreValue(key: string): Promise<string | null> {
+    try {
+      const data = await readFile(join(this.dataDir, 'agent.db'))
+      return bboltGet(data, 'identity', key)?.toString('utf8') ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** True when the last start failure looks like a stale-identity FATAL. */
+  private async detectStaleIdentity(firstError: string): Promise<boolean> {
+    if (/fails role requirement|invalid signature/i.test(firstError)) return true
+    try {
+      const log = await readFile(join(this.dataDir, 'sam-node.log'), 'utf8')
+      return /fails role requirement|invalid signature/i.test(log.slice(-8192))
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Silent re-enrollment using the store's OIDC refresh token — the recovery
+   * sam-node itself never attempts when a stored identity stops verifying
+   * (hub key rotation). Returns recovered=false with a human reason when the
+   * machine cannot heal itself (no refresh token, token rejected, …); the
+   * caller then falls back to the device flow. Never throws.
+   */
+  async recoverStaleIdentity(): Promise<{ recovered: boolean; reason?: string }> {
+    try {
+      const refreshToken = await this.readStoreValue('refresh_token')
+      const issuer = await this.readStoreValue('oidc_issuer')
+      const clientId = await this.readStoreValue('oidc_client_id')
+      const controlPlane = (await this.readStoreValue('control_plane_url')) ?? this.controlPlane
+      if (!refreshToken || !issuer || !clientId) {
+        return { recovered: false, reason: 'no stored refresh token (was the node enrolled with offline access?)' }
+      }
+      const disco = await fetch(`${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(10_000) })
+      if (!disco.ok) return { recovered: false, reason: `OIDC discovery failed (${disco.status})` }
+      const tokenEndpoint = (await disco.json() as { token_endpoint?: string }).token_endpoint
+      if (!tokenEndpoint) return { recovered: false, reason: 'OIDC discovery document has no token_endpoint' }
+      const grant = await fetch(tokenEndpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId }),
+        signal: AbortSignal.timeout(15_000),
+      })
+      const tokenBody = await grant.json().catch(() => ({})) as { access_token?: string; error?: string }
+      if (!grant.ok || !tokenBody.access_token) {
+        return { recovered: false, reason: `refresh token rejected (${tokenBody.error ?? `http ${grant.status}`}) — re-enroll in the browser` }
+      }
+      // Clear the stale identity (keeps the PeerID), then enroll with the JWT.
+      const jwtPath = join(this.dataDir, '.renewal.jwt')
+      await writeFile(jwtPath, tokenBody.access_token, { mode: 0o600 })
+      try {
+        await execFileAsync(this.binary, ['reset', '--data-dir', this.dataDir], { timeout: 15_000 })
+        const args = ['run', '--daemonize', '--data-dir', this.dataDir, '--join', '--control-plane', controlPlane, '--jwt-path', jwtPath]
+        if (this.announcePrivate !== undefined) args.push(`--announce-private=${this.announcePrivate}`)
+        await execFileAsync(this.binary, args, { timeout: 30_000 })
+      } finally {
+        await rm(jwtPath, { force: true })
+      }
+      return { recovered: true }
+    } catch (error) {
+      return { recovered: false, reason: error instanceof Error ? error.message : String(error) }
     }
   }
 
