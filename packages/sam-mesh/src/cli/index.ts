@@ -239,7 +239,9 @@ async function runNode(args: string[]): Promise<void> {
       const transient = (error: string | null | undefined): boolean =>
         error != null && /token request failed with status: 401|request was aborted/i.test(error)
       let session = nodes.beginEnrollment({ controlPlane, ...(bootstrapToken !== undefined ? { bootstrapToken } : {}) })
+      let sessionStarted = Date.now()
       for (let attempt = 1; ; attempt++) {
+        sessionStarted = Date.now()
         stderr.write(`Enrollment session ${session.sessionId} — waiting for the device flow...\n`)
         while (session.state === 'starting') await new Promise((r) => setTimeout(r, 200))
         if (session.state === 'awaiting_user') {
@@ -247,10 +249,17 @@ async function runNode(args: string[]): Promise<void> {
         }
         process.once('SIGINT', () => { session.cancel(); stderr.write('\nEnrollment cancelled.\n') })
         await session.done
-        if (attempt === 1 && session.state === 'failed' && transient(session.error)) {
+        // Retry only when the session survived a while — i.e. polling worked
+        // and something later broke. An instant 401 is deterministic (e.g.
+        // sam-node ≤ alpha.7 cannot poll dex at all); a retry would burn a
+        // fresh code on the same wall.
+        if (attempt === 1 && session.state === 'failed' && transient(session.error) && Date.now() - sessionStarted >= 45_000) {
           stderr.write(`Device flow hiccup (${session.error}) — retrying once with a fresh code.\n`)
           session = nodes.beginEnrollment({ controlPlane, ...(bootstrapToken !== undefined ? { bootstrapToken } : {}) })
           continue
+        }
+        if (session.state === 'failed' && transient(session.error) && Date.now() - sessionStarted < 45_000) {
+          stderr.write(`The device flow failed INSTANTLY — this sam-node build cannot poll the hub's identity provider (known: every release ≤ alpha.7 dies on dex's 401-pending; fixed at upstream HEAD). Enroll with a newer sam-node (SAM_NODE=/path/to/sam-node) or wait for the next upstream release.\n`)
         }
         break
       }
