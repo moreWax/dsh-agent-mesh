@@ -62,6 +62,21 @@ describe('inference proxy (http)', () => {
     expect(res.status).toBe(200)
     expect(seen.at(-1)).toMatchObject({ authorization: 'Bearer upstream-key', capability: undefined, path: '/v1/chat/completions' })
 
+    // Bearer alias: the standard OpenAI credential slot carries the same
+    // capability — stock clients without a custom-header feature can execute.
+    res = await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer fleet-cap' }, body: '{}' })
+    expect(res.status).toBe(200)
+    // ...and the capability never leaks upstream: Authorization is still replaced.
+    expect(seen.at(-1)).toMatchObject({ authorization: 'Bearer upstream-key', capability: undefined })
+
+    // wrong Bearer -> same uniform 403
+    res = await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer nope' }, body: '{}' })
+    expect(res.status).toBe(403)
+
+    // precedence locked: a present (wrong) x-fleet-capability beats a right Bearer
+    res = await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'nope', authorization: 'Bearer fleet-cap' }, body: '{}' })
+    expect(res.status).toBe(403)
+
     proxy.close(); upstream.close()
   })
 })

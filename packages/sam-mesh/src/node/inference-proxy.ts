@@ -19,6 +19,13 @@ export function classifyGate(method: string, pathname: string): GateClass {
   return method.toUpperCase() === 'GET' && pathname.replace(/\/$/, '') === '/v1/models' ? 'open' : 'gated'
 }
 
+/** Extract the token from an `Authorization: Bearer <token>` header (OpenAI-client alias for the gate). */
+export function bearerOf(header: string | undefined): string | undefined {
+  if (!header) return undefined
+  const match = /^Bearer\s+(\S+)\s*$/i.exec(header.trim())
+  return match?.[1]
+}
+
 /** Timing-safe capability comparison via digests (avoids length-oracle early exit). */
 export function capabilityMatches(provided: string | undefined, required: string): boolean {
   if (!provided || !required) return false
@@ -71,7 +78,12 @@ export function createInferenceProxyServer(options: InferenceProxyOptions): Serv
     const url = new URL(req.url ?? '/', 'http://loopback')
     const gate = classifyGate(req.method ?? 'GET', url.pathname)
     const required = typeof options.requiredCapability === 'function' ? options.requiredCapability() : options.requiredCapability
-    if (gate === 'gated' && !capabilityMatches(req.headers['x-fleet-capability'] as string | undefined, required)) {
+    // The dedicated header wins; `Authorization: Bearer <capability>` is the
+    // same secret through the standard OpenAI-client credential slot, so any
+    // off-the-shelf client (curl, pi-ai custom providers, aichat) can use the
+    // fleet without a custom-header feature. Identical timing-safe compare.
+    const presented = (req.headers['x-fleet-capability'] as string | undefined) ?? bearerOf(req.headers.authorization)
+    if (gate === 'gated' && !capabilityMatches(presented, required)) {
       res.writeHead(403, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: { message: 'fleet capability required', type: 'capability_required' } }))
       return

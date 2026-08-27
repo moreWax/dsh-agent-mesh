@@ -5,6 +5,7 @@ import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-credentials/types'
 import { CallId, LlmAdapter, LlmError, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { ContentBlock, GenerateOptions, LlmModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SamClient } from '@morewax/sam-mesh'
 import { SamInferenceClient, type ChatCompletionChunk, type ChatMessage, type InferenceRoute, type RequiredLabels } from '../inference/index.js'
@@ -13,6 +14,8 @@ import { SamHttpError, SamTransportError } from '@morewax/sam-mesh'
 export const name = 'agent-mesh-llm'
 export const inject = ['llm', 'credentials', 'agentMesh']
 export const PROVIDER = 'sam-mesh'
+/** Settings namespace the Models page edits for this provider (row config is the base layer). */
+export const NS = settingsNamespace(name)
 
 export interface Config {
   socketPath?: string | false
@@ -102,11 +105,11 @@ function usage(chunk: ChatCompletionChunk): StreamChunk | undefined {
 /** A single-attempt adapter: retries and peer failover remain owned by dsh and SAM respectively. */
 export class SamLlmAdapter extends LlmAdapter {
   private modelsCache: { at: number; models: readonly LlmModelInfo[] } | undefined
-  constructor(private readonly inference: SamInferenceClient, private readonly config: Config = {}, private readonly resolveCapability?: () => Promise<string | undefined>) { super() }
+  constructor(private readonly inference: SamInferenceClient, private readonly config: () => Config, private readonly resolveCapability?: () => Promise<string | undefined>) { super() }
   override providerInfo(provider: string) { return { id: provider, name: 'SAM Mesh' } }
   override providerRetryPolicy() { return resolveRetryPolicy({ mode: 'normal', maxRetries: 0 }, 'agent-mesh-llm.retryPolicy') }
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    const ttl = this.config.modelsTtlMs ?? 30_000
+    const ttl = this.config().modelsTtlMs ?? 30_000
     if (this.modelsCache && Date.now() - this.modelsCache.at < ttl) return this.modelsCache.models
     try {
       const listed = await this.inference.models(this.requestOptions())
@@ -167,11 +170,13 @@ export class SamLlmAdapter extends LlmAdapter {
     yield { type: 'finish', reason: { kind: tools.size || finish === 'tool_calls' ? 'tool-calls' : finish === 'length' ? 'max-tokens' : 'stop' } }
   }
   private requestOptions(signal?: AbortSignal): { route?: InferenceRoute; requiredLabels?: RequiredLabels; signal?: AbortSignal; serviceHeaders?: Record<string, string> } {
-    return { ...(this.config.route ? { route: this.config.route } : {}), ...((this.config.requiredLabelsAnyOf?.length || this.config.requiredLabels?.length) ? { requiredLabels: (this.config.requiredLabelsAnyOf?.length ? this.config.requiredLabelsAnyOf : this.config.requiredLabels) as RequiredLabels } : {}), ...(signal ? { signal } : {}) }
+    const config = this.config()
+    return { ...(config.route ? { route: config.route } : {}), ...((config.requiredLabelsAnyOf?.length || config.requiredLabels?.length) ? { requiredLabels: (config.requiredLabelsAnyOf?.length ? config.requiredLabelsAnyOf : config.requiredLabels) as RequiredLabels } : {}), ...(signal ? { signal } : {}) }
   }
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
+  let source: () => Config = () => config
   const socketPath = typeof config.socketPath === 'string' && config.socketPath.startsWith('~/') ? `${homedir()}/${config.socketPath.slice(2)}` : config.socketPath
   const core = new SamClient({
     ...(socketPath !== undefined ? { socketPath } : {}),
@@ -183,10 +188,22 @@ export function apply(ctx: Context, config: Config = {}): void {
   // Capability source: the row's own ref wins; otherwise fall back to the
   // agent-mesh row's callCapabilityRef (the fleet patch sets exactly one ref
   // for everything outgoing) — fleet members get gated mesh inference with
-  // ZERO extra config.
-  const ref = config.capabilityCredentialRef?.trim()
-  const resolveCapability = ref
-    ? async () => (await ctx.credentials.resolve(credentialRef(ref)))?.value
-    : ctx.agentMesh?.resolveCallCapability
-  ctx.llm.registerAdapter([PROVIDER], new SamLlmAdapter(new SamInferenceClient(core), config, resolveCapability))
+  // ZERO extra config. Read from the CURRENT settings layer per call: a
+  // ref edited on the Models page takes effect without a row reload.
+  const resolveCapability = async (): Promise<string | undefined> => {
+    const ref = source().capabilityCredentialRef?.trim()
+    if (ref) return (await ctx.credentials.resolve(credentialRef(ref)))?.value
+    return ctx.agentMesh?.resolveCallCapability?.()
+  }
+  // The Models page directory: without this the provider exists only as a
+  // live route and configuration surfaces have no settings address for it.
+  ctx.llm.registerConfigurableProviders([{ provider: PROVIDER, displayName: 'SAM Mesh', settingsNs: NS, settingsPath: [] }])
+  const registration = ctx.llm.registerAdapter([PROVIDER], new SamLlmAdapter(new SamInferenceClient(core), () => source(), resolveCapability))
+  // Settings changes (route mode, labels, TTL, capability ref) land live;
+  // replace() re-publishes registry facts atomically rather than dropping
+  // the route between dispose and re-register.
+  installSettingsSection(ctx, NS, Config, config, {
+    setSource: (next) => { source = next },
+    onChange: () => registration.replace([PROVIDER]),
+  })
 }
