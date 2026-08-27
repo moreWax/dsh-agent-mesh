@@ -11,7 +11,9 @@ describe('task durability across restarts', () => {
   it('a task submitted to one store instance is readable from a fresh one (simulated restart)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'task-persist-'))
     const file = join(dir, 'tasks.db')
-    const first = new TaskService(new SQLiteTaskStore(file), executor)
+    // autoStart off: the durability assertion does not need execution, and a
+    // background execute racing store.close() is an unhandled rejection.
+    const first = new TaskService(new SQLiteTaskStore(file), executor, { autoStart: false })
     const submitted = await first.task_submit({ idempotencyKey: 'k1', input: { hello: 'world' }, kind: 'note' })
     expect(submitted.task.taskId).toBeTruthy()
     ;(first.store as SQLiteTaskStore).close()
