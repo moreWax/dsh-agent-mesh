@@ -2,11 +2,13 @@
  * Bundled sam-node resolution: the npm package CARRIES the binary.
  *
  * Platform packages (@morewax/sam-node-<os>-<arch>) ship sam-node.gz +
- * manifest.json (release tag, artifact sha256, binary sha256) — official
- * google/sam release artifacts, checksum-verified at pack time. Nothing is
- * downloaded at install or runtime; the gzipped binary is extracted lazily
- * on first use into <dataDir>/vendor/, verified against the manifest, and
- * cached by content hash so upgrades re-extract cleanly.
+ * manifest.json (source, commit, binary sha256). Currently CI-BUILT from a
+ * pinned google/sam commit (scripts/build-sam-binaries.mjs) because every
+ * release ≤ alpha.7 cannot poll dex device flow; scripts/fetch-sam-binaries.mjs
+ * (official release tarballs + checksums.txt) is the switch-back path once
+ * upstream tags the fix. Nothing is downloaded at install or runtime; the
+ * gzipped binary is extracted lazily into <dataDir>/vendor/, verified
+ * against the manifest, and cached by content hash so upgrades re-extract.
  */
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'

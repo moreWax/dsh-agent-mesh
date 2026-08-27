@@ -87,12 +87,21 @@ see [docs/join-the-fleet.md](docs/join-the-fleet.md).
 
 ## The sam-node binary is included
 
-`dsh plugin add` is the *only* download. The official `google/sam` release
-binary for your platform ships inside `@morewax/sam-node-<os>-<arch>`
+`dsh plugin add` is the *only* download. A `sam-node` binary for your
+platform ships inside `@morewax/sam-node-<os>-<arch>`
 (an optional dependency — you download only your platform, ~13MB gzipped),
-checksum-verified against the release's published SHA-256 sums at pack time
-and integrity-checked again at first execution. No installer script, no
-install-time network.
+integrity-checked against its packed manifest at first execution. No
+installer script, no install-time network.
+
+**Provenance:** the binary is currently **CI-built from a pinned
+`google/sam` commit** (`6502323`, `scripts/build-sam-binaries.mjs` —
+reproduce it yourself or via the build-sam-node workflow and compare
+sha256). We build instead of shipping the official release tarball because
+every release ≤ `v0.1.0-alpha.7` cannot complete device-flow enrollment
+against the hub's identity provider (the token poll dies on dex's
+non-RFC 401 pending responses; upstream fix `994d082a` is in no release).
+`scripts/fetch-sam-binaries.mjs` (official tarballs, checksums.txt
+verified) is the documented switch-back once upstream tags the fix.
 
 Resolution: `SAM_NODE` env → **bundled** (lazy-extracted to
 `~/.config/sam-mesh/vendor/`, cached by content hash) → PATH. The settings

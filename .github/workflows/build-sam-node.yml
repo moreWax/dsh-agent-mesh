@@ -1,0 +1,42 @@
+name: build-sam-node
+
+# Reproducibility proof for the vendored sam-node binaries: anyone can run
+# this workflow (or scripts/build-sam-binaries.mjs locally) and get the exact
+# sha256 recorded in packages/sam-node-*/bin/manifest.json.
+
+on:
+  push:
+    paths: ['scripts/build-sam-binaries.mjs', '.github/workflows/build-sam-node.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build the pinned sam-node for all platforms
+        run: node scripts/build-sam-binaries.mjs
+      - name: Smoke-test the linux binary
+        run: |
+          node -e "const{gunzipSync}=require('node:zlib');const{readFileSync,writeFileSync,chmodSync}=require('node:fs');writeFileSync('/tmp/sam-node',gunzipSync(readFileSync('packages/sam-node-linux-x64/bin/sam-node.gz')));chmodSync('/tmp/sam-node',0o755)"
+          /tmp/sam-node --help | head -2
+      - name: Verify manifests are reproducible (build twice, compare)
+        run: |
+          node scripts/build-sam-binaries.mjs
+          git diff --exit-code packages/*/bin/manifest.json && echo "REPRODUCIBLE"
+      - name: Upload built binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-node-binaries
+          path: packages/sam-node-*/bin/
+          retention-days: 30

@@ -6,7 +6,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "fetch:binaries": "node scripts/fetch-sam-binaries.mjs && node scripts/fetch-llama-binaries.mjs",
+    "fetch:binaries": "node scripts/build-sam-binaries.mjs && node scripts/fetch-llama-binaries.mjs",
     "setup": "node scripts/setup.mjs",
     "start": "node scripts/start.mjs",
     "sam-mesh": "node packages/sam-mesh/lib/cli/index.mjs",

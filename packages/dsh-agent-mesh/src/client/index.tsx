@@ -18,6 +18,64 @@ function unwrap<T>(r:{ok:true;value:T}|{ok:false;error:{message:string}}):T { if
 export function createMeshWebApi(ctx:Context):MeshWebApi { const r=ctx.remote.agentMeshWeb; return {snapshot:async()=>unwrap(await r.snapshot()),check:async()=>unwrap(await r.check()),startNode:async a=>unwrap(await r.startNode(a)),installSkill:async(q,a)=>unwrap(await r.installSkill(q,a)),registerService:async(q,a)=>unwrap(await r.registerService(q,a)),deviceFlowInstructions:async()=>unwrap(await r.deviceFlowInstructions()),nodeStatus:async()=>unwrap(await r.nodeStatus()),nodeBinaryOptions:async()=>unwrap(await r.nodeBinaryOptions()),stopNode:async a=>unwrap(await r.stopNode(a)),beginEnrollment:async(a,o)=>unwrap(await r.beginEnrollment(a,o)),enrollmentStatus:async id=>unwrap(await r.enrollmentStatus(id)),activeEnrollment:async()=>unwrap(await r.activeEnrollment()),cancelEnrollment:async id=>unwrap(await r.cancelEnrollment(id)),meshDoctor:async()=>unwrap(await r.meshDoctor()),pairRequests:async()=>unwrap(await r.pairRequests()),approvePairRequest:async(id,a)=>unwrap(await r.approvePairRequest(id,a)),rejectPairRequest:async(id,a)=>unwrap(await r.rejectPairRequest(id,a)),fleetAdminRequests:async q=>unwrap(await r.fleetAdminRequests(q)),fleetAdminApprove:async(q,a)=>unwrap(await r.fleetAdminApprove(q,a)),fleetAdminReject:async(q,a)=>unwrap(await r.fleetAdminReject(q,a)),fleetDiscover:async()=>unwrap(await r.fleetDiscover()),requestFleetPair:async(q,a)=>unwrap(await r.requestFleetPair(q,a)),fleetPairStatus:async id=>unwrap(await r.fleetPairStatus(id)),inferenceServeStatus:async()=>unwrap(await r.inferenceServeStatus()),inferenceServeConfigure:async(q,a)=>unwrap(await r.inferenceServeConfigure(q,a)),runtimeStatus:async()=>unwrap(await r.runtimeStatus()),runtimePull:async(q,a)=>unwrap(await r.runtimePull(q,a)),runtimePullStatus:async id=>unwrap(await r.runtimePullStatus(id))/* scaffold-anchor: api-impl */} }
 const box:React.CSSProperties={border:"1px solid var(--border,#444)",borderRadius:10,padding:16,display:"grid",gap:12}; const button:React.CSSProperties={padding:"7px 12px",borderRadius:6,cursor:"pointer"};
 function Json({value}:{value:unknown}) { return <pre style={{whiteSpace:"pre-wrap",maxHeight:220,overflow:"auto",fontSize:12}}>{JSON.stringify(value,null,2)}</pre> }
+const chip:React.CSSProperties={display:"inline-flex",alignItems:"center",gap:6,padding:"3px 10px",border:"1px solid var(--border,#444)",borderRadius:999,fontSize:12}
+const panel:React.CSSProperties={border:"1px solid var(--border,#444)",borderRadius:8,padding:10,display:"grid",gap:6}
+
+/** Copy-to-clipboard with inline confirmation; clipboard API may be absent on
+ * non-secure origins, so failures degrade to a no-op rather than an error. */
+function CopyButton({text}:{text:string}) { const [copied,setCopied]=useState(false)
+ return <button style={{...button,padding:"2px 8px",fontSize:12}} onClick={()=>{ const nav=(globalThis as {navigator?:{clipboard?:{writeText(t:string):Promise<void>}}}).navigator; if(!nav?.clipboard) return
+  void nav.clipboard.writeText(text).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false),1500) }).catch(()=>undefined) }}>{copied?"\u2713 copied":"copy"}</button> }
+
+/** One-line chip content for a snapshot service/tool entry. Both probes return
+ * loosely-typed mesh records, so every field is extracted defensively. */
+export function chipView(kind:"services"|"tools",entry:unknown):{name:string;meta:string} {
+ const o=(entry&&typeof entry==="object"?entry:{}) as Record<string,unknown>
+ const str=(v:unknown):string|undefined=>typeof v==="string"&&v.trim()?v.trim():undefined
+ if(kind==="services") return { name:str(o.name)??str(o.id)??"(unnamed service)", meta:[str(o.protocol),str(o.endpoint)].filter(Boolean).join(" \u00b7 ") }
+ const svc=str(o.service_name); const peer=str(o.peer_id)
+ return { name:str(o.tool_name)??str(o.name)??"(unnamed tool)", meta:[svc?`svc ${svc}`:undefined,peer?`peer ${peer.slice(0,10)}\u2026`:undefined].filter(Boolean).join(" \u00b7 ") }
+}
+
+/** Model roster view-model: group by the serving peer (owned_by) when the
+ * snapshot carries it; badge rows served by the LOCAL serve row with the
+ * row's live state. Missing data degrades to a single unbadged group. */
+export interface ModelRow { id:string; badge:"warming"|"live"|"error"|null }
+export interface ModelGroup { name:string; thisMachine:boolean; rows:ModelRow[] }
+export function groupModels(models:unknown[],serve?:{models:string[];rowState?:string|undefined;announceName?:string|undefined}|null):ModelGroup[] {
+ const rows=(Array.isArray(models)?models:[]).map(m=>{ const o=(m&&typeof m==="object"?m:{}) as Record<string,unknown>
+  return { id:typeof o.id==="string"?o.id:String(JSON.stringify(m)), by:typeof o.owned_by==="string"?o.owned_by:"" } })
+ const local=new Set(serve?.models??[])
+ const badgeOf=(id:string):ModelRow["badge"]=>{ if(!local.has(id)) return null; return serve?.rowState==="starting"?"warming":serve?.rowState==="error"?"error":"live" }
+ const anyBy=rows.some(r=>r.by)
+ const groups=new Map<string,ModelRow[]>()
+ for(const r of rows){ const key=anyBy?(r.by||"unknown source"):"mesh"; groups.set(key,[...(groups.get(key)??[]),{id:r.id,badge:badgeOf(r.id)}]) }
+ return [...groups.entries()].map(([name,rs])=>({ name, thisMachine:rs.length>0&&rs.every(r=>local.has(r.id)), rows:rs })) }
+
+/** First-run wizard view-model: derive the checklist from live mesh state.
+ * Pure, so the step logic is unit-tested without a DOM. */
+export interface WizardFacts { installed:boolean; enrolled:boolean; running:boolean; pairing:boolean; fleets?:{name:string;providers:number;peerIds:string[]}[]|undefined; peers?:number|undefined; models?:number|undefined; ownPeer?:string|undefined; joinedFleet?:string|undefined }
+export type WizardStepId="enroll"|"run"|"fleet"|"ready"
+export interface WizardStep { id:WizardStepId; label:string; done:boolean; current:boolean; error?:string|undefined; fix?:string|undefined; detail?:string|undefined }
+export function wizardSteps(f:WizardFacts):WizardStep[] {
+ const providerFleet=f.ownPeer&&f.fleets?f.fleets.find(x=>x.peerIds.includes(f.ownPeer!))?.name:undefined
+ const membership=f.joinedFleet??providerFleet??(f.pairing?"a fleet you host":undefined)
+ const discovered=f.fleets!==undefined
+ const ready=discovered&&((f.fleets?.length??0)>0||(f.models??0)>0||(f.peers??0)>0)
+ const steps:WizardStep[]=[
+  { id:"enroll", label:"Node installed & enrolled", done:f.enrolled, current:false,
+    ...(!f.installed?{ error:"sam-node binary not found on this machine", fix:"install sam-node, or pick a binary under Settings \u2192 Plugins \u2192 Agent Mesh \u2192 sam-node binary." }
+     :!f.enrolled?{ detail:"sam-node is present \u2014 enrollment authorizes this machine on the hub" }:{}) },
+  { id:"run", label:"Node running", done:f.running, current:false, ...(!f.running&&f.enrolled?{ detail:"enrolled \u2014 the daemon is stopped" }:{}) },
+  { id:"fleet", label:"Joined a fleet", done:!!membership, current:false, ...(membership?{ detail:`member of ${membership}` }:{}) },
+  { id:"ready", label:"Capability ready", done:ready, current:false,
+    ...(!ready&&discovered?{ detail:"on the mesh, but no fleet services, peers, or models are visible yet" }:{} ) },
+ ]
+ const current=steps.find(s=>!s.done)
+ return steps.map(s=>s===current?{...s,current:true}:s) }
+
+const peerCount=(mesh:unknown):number|undefined=>{ const c=(mesh&&typeof mesh==="object"?(mesh as Record<string,unknown>).connected_peers:undefined); return typeof c==="number"?c:Array.isArray(c)?c.length:undefined }
+const ownPeerId=(mesh:unknown):string|undefined=>{ const p=(mesh&&typeof mesh==="object"?(mesh as Record<string,unknown>).router_peer_id:undefined); return typeof p==="string"?p:undefined }
 export function MeshSettingsCard({api}:{api:MeshWebApi}) { const [s,setS]=useState<MeshDashboardSnapshot>(); const [error,setError]=useState(""); const [notice,setNotice]=useState(""); const load=useCallback(async()=>{setError("");try{setS(await api.snapshot())}catch(e){setError(e instanceof Error?e.message:String(e))}},[api]); useEffect(()=>{void load()},[load]);
  const approve=()=>({approved:true,approvedBy:"DeepSeek Harness web user"}); const act=async(f:()=>Promise<ActionResult>)=>{const result=await f();setNotice(result.ok?result.message:result.error);await load()};
  return <section style={box} data-testid="agent-mesh-settings"><header><h2 style={{margin:0}}>Agent Mesh</h2><small>Read-only status; mutations run only after the button you select.</small></header>{error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
