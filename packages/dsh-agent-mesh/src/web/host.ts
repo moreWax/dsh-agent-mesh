@@ -6,7 +6,7 @@ import { generatePairKeys, open } from "@morewax/sam-mesh"
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-export interface ServeStatusView { configured: boolean; target: string; port: number; announceName: string; modelAllowlist: string[]; runtimeModel: string; running: boolean; models: string[]; backends: Array<{ name: string; url: string; present: boolean }> }
+export interface ServeStatusView { configured: boolean; target: string; port: number; announceName: string; modelAllowlist: string[]; runtimeModel: string; running: boolean; models: string[]; rowState?: string | undefined; rowDetail?: string | undefined; backends: Array<{ name: string; url: string; present: boolean }> }
 export interface ServeConfigureRequest { enabled: boolean; target?: string; announceName?: string; modelAllowlist?: string[]; runtimeModel?: string; runtimeAlias?: string }
 export interface RuntimeStatusView { available: boolean; tag?: string; error?: string; models: Array<{ file: string; bytes: number }> }
 export interface RuntimePullView { sessionId: string }
@@ -338,7 +338,9 @@ export class AgentMeshWebHost extends TypertRemoteService {
     } catch { /* not serving right now */ }
     const { WELL_KNOWN_BACKENDS, probeBackend } = await import("@morewax/sam-mesh/node")
     const backends = await Promise.all(WELL_KNOWN_BACKENDS.map(async b => ({ ...b, present: await probeBackend(b).catch(() => false) })))
-    return { configured: readServeConfig(existing) !== null, target: config.target, port: config.port, announceName: config.announceName, modelAllowlist: config.modelAllowlist, runtimeModel: config.runtimeModel, running, models, backends }
+    const { readServeStatuses } = await import("@morewax/sam-mesh/node")
+    const rowStatus = (await readServeStatuses(join(homedir(), ".config", "sam-mesh"))).find(s => s.name === config.announceName)
+    return { configured: readServeConfig(existing) !== null, target: config.target, port: config.port, announceName: config.announceName, modelAllowlist: config.modelAllowlist, runtimeModel: config.runtimeModel, running, models, ...(rowStatus ? { rowState: rowStatus.state, ...(rowStatus.detail !== undefined ? { rowDetail: rowStatus.detail } : {}) } : {}), backends }
   }
 
   /** Vendored-runtime facts for the card: binary availability + model store. Ungated read. */

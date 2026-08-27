@@ -65,6 +65,21 @@ export const Config: z<Config> = z.object({
 type ServeContext = Context & { agentMesh: AgentMeshService }
 
 export async function apply(ctx: ServeContext, config: Config = {}): Promise<void> {
+  const statusName = config.announceName ?? 'dsh-mesh-inference'
+  const dataDir = process.env.SAM_DATA_DIR ?? join(homedir(), '.config', 'sam-mesh')
+  // DOCTRINE: a serve row must never take dsh down. Any startup failure
+  // degrades to a loud status file + journal line; the rest of the profile boots.
+  try {
+    await applyInner(ctx, config, statusName, dataDir)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`[agent-mesh-inference] DISABLED — ${message}`)
+    const { writeServeStatus } = await import('@morewax/sam-mesh/node')
+    await writeServeStatus(dataDir, { state: 'error', name: statusName, detail: message }).catch(() => undefined)
+  }
+}
+
+async function applyInner(ctx: ServeContext, config: Config, statusName: string, dataDir: string): Promise<void> {
   // schemastery materializes an all-defaulted object even when absent — runtime only counts when model is set.
   const runtimeCfg = config.runtime?.model ? config.runtime : undefined
   if (config.target && runtimeCfg) throw new Error('agent-mesh-inference: target and runtime are mutually exclusive — the vendored runtime IS the backend')
@@ -95,7 +110,6 @@ export async function apply(ctx: ServeContext, config: Config = {}): Promise<voi
   if (runtimeCfg) {
     const rc = runtimeCfg as RuntimeConfig & { model: string }
     const { resolveVendoredLlama, parseModelSpec, modelStorePath, resolveHfFile, LlamaRuntime } = await import('@morewax/sam-mesh/node')
-    const dataDir = join(homedir(), '.config', 'sam-mesh')
     const spec = parseModelSpec(rc.model)
     let modelPath: string
     let defaultAlias: string
@@ -112,16 +126,28 @@ export async function apply(ctx: ServeContext, config: Config = {}): Promise<voi
     }
     const alias = rc.alias ?? defaultAlias
     const vendored = await resolveVendoredLlama(dataDir)
+    const { writeServeStatus } = await import('@morewax/sam-mesh/node')
     runtime = new LlamaRuntime(vendored, {
       modelPath, alias,
       port: rc.port ?? 8180,
+      dataDir,
       ...(rc.contextSize !== undefined ? { contextSize: rc.contextSize } : {}),
       ...(rc.gpuLayers !== undefined ? { gpuLayers: rc.gpuLayers } : {}),
       onLog: (line) => console.info(`[agent-mesh-inference:runtime] ${line}`),
     })
-    await runtime.start()
     target = `http://127.0.0.1:${rc.port ?? 8180}`
-    log(`vendored llama.cpp ${vendored.tag} serving ${alias} on :${rc.port ?? 8180}`)
+    // Background start: big models load for minutes — dsh boot must not wait.
+    // The gate 502s until the backend is healthy; the status file tells the truth.
+    const rt = runtime
+    await writeServeStatus(dataDir, { state: 'starting', name: statusName, detail: `loading ${alias} (llama.cpp ${vendored.tag})`, target }).catch(() => undefined)
+    void rt.start().then(async () => {
+      log(`vendored llama.cpp ${vendored.tag} serving ${alias} on :${rc.port ?? 8180}`)
+      await writeServeStatus(dataDir, { state: 'serving', name: statusName, detail: `${alias} on llama.cpp ${vendored.tag}`, target, models: [alias] }).catch(() => undefined)
+    }).catch(async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[agent-mesh-inference:runtime] startup failed — ${message}`)
+      await writeServeStatus(dataDir, { state: 'error', name: statusName, detail: message, target }).catch(() => undefined)
+    })
   }
   if (target === 'auto') {
     const { detectInferenceBackends } = await import('@morewax/sam-mesh/node')
@@ -142,6 +168,10 @@ export async function apply(ctx: ServeContext, config: Config = {}): Promise<voi
   const refreshTimer = setInterval(() => void refresh(), config.capabilityRefreshMs ?? 60_000)
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve()) })
   log(`gated proxy on http://${host}:${port} -> ${target} (${capability ? 'capability gate ON' : 'GATE OFF — allowed explicitly'})`)
+  if (!runtimeCfg) {
+    const { writeServeStatus } = await import('@morewax/sam-mesh/node')
+    await writeServeStatus(dataDir, { state: 'serving', name: statusName, detail: `external backend ${target}`, target }).catch(() => undefined)
+  }
 
   let stopAnnounce: (() => void) | undefined
   if (config.announceName) {

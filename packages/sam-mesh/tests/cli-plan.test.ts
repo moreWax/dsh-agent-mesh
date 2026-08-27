@@ -178,3 +178,22 @@ describe('mergeProfilePatch', () => {
     expect(out).toHaveProperty('conflict')
   })
 })
+
+describe('buildChecks inference rows', () => {
+  const base = { installed: true, enrolled: true, running: true, peerCount: 3, serviceCount: 1, localServiceCount: 1 }
+  it('runtime unavailable fails with a fix; store reports detail; serve rows map states', () => {
+    const checks = buildChecks({ ...base, runtimeTag: null, modelStore: { count: 2, bytes: 3e9 }, serveRows: [
+      { name: 'good', state: 'serving' },
+      { name: 'loading', state: 'starting', detail: 'loading smol' },
+      { name: 'broken', state: 'error', detail: 'port busy' },
+    ] })
+    expect(checks.find(c => c.name === 'vendored llama.cpp runtime')).toMatchObject({ ok: false })
+    expect(checks.find(c => c.name === 'vendored llama.cpp runtime')?.fix).toMatch(/reinstall/)
+    expect(checks.find(c => c.name === 'model store')).toMatchObject({ ok: true, detail: '2 models, 3.0 GB' })
+    expect(checks.find(c => c.name === "serve row 'good'")?.ok).toBe(true)
+    expect(checks.find(c => c.name === "serve row 'loading'")?.fix).toMatch(/still loading/)
+    expect(checks.find(c => c.name === "serve row 'broken'")?.fix).toMatch(/port busy/)
+    const rendered = renderDoctor(checks)
+    expect(rendered).toContain("serve row 'broken'")
+  })
+})

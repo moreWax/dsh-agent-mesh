@@ -331,9 +331,20 @@ else if (command === 'doctor') {
   }
   let localServiceCount = 0
   if (status.running && sam) { try { localServiceCount = (await sam.listLocalServices()).length } catch { localServiceCount = 0 } }
+  let runtimeTag: string | null | undefined
+  let modelStore: { count: number; bytes: number } | undefined
+  let serveRows: Array<{ name: string; state: string; detail?: string | undefined }> | undefined
+  try {
+    const { resolveVendoredLlama, listModelStore, readServeStatuses } = await import('../node/index.js')
+    const dataDir = process.env.SAM_DATA_DIR ?? `${process.env.HOME}/.config/sam-mesh`
+    try { runtimeTag = (await resolveVendoredLlama(dataDir)).tag } catch { runtimeTag = null }
+    const models = await listModelStore(dataDir)
+    modelStore = { count: models.length, bytes: models.reduce((a, m) => a + m.bytes, 0) }
+    serveRows = (await readServeStatuses(dataDir)).map(s => ({ name: s.name, state: s.state, detail: s.detail }))
+  } catch { runtimeTag = undefined }
   const checks = buildChecks({
     installed: status.installed, enrolled: status.enrolled, running: status.running,
-    peerCount, serviceCount, localServiceCount,
+    peerCount, serviceCount, localServiceCount, runtimeTag, modelStore, serveRows,
   })
   if (status.enrolled && status.enrolledHub) {
     const enrolledCheck = checks.find(ch => ch.name === 'enrolled on a hub')

@@ -21,6 +21,18 @@ import { join } from 'node:path'
 
 const execFileAsync = promisify(execFile)
 
+/** Process-identity check: linux /proc first, ps fallback (mac). */
+async function isLlamaServer(pid: number): Promise<boolean> {
+  try {
+    const cmdline = await readFile(`/proc/${pid}/cmdline`, 'utf8')
+    return cmdline.includes('llama-server')
+  } catch { /* not linux or gone */ }
+  try {
+    const out = await execFileAsync('ps', ['-p', String(pid), '-o', 'comm='])
+    return out.stdout.includes('llama-server')
+  } catch { return false }
+}
+
 const RUNTIME_PACKAGES: Record<string, string> = {
   'darwin-arm64': '@morewax/llama-cpp-darwin-arm64',
   'darwin-x64': '@morewax/llama-cpp-darwin-x64',
@@ -94,23 +106,26 @@ export function parseModelSpec(spec: string): ModelSpec {
 type HfFetch = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>
 
 /** Pick the GGUF file for a spec: exact file, else the filename containing the quant tag, else the only .gguf. */
-export async function resolveHfFile(spec: ModelSpec & { kind: 'hf' }, fetchImpl: HfFetch = fetch as unknown as HfFetch): Promise<{ file: string; size?: number }> {
+export interface ResolvedHfFile { file: string; size?: number; sha256?: string }
+
+export async function resolveHfFile(spec: ModelSpec & { kind: 'hf' }, fetchImpl: HfFetch = fetch as unknown as HfFetch): Promise<ResolvedHfFile> {
   const res = await fetchImpl(`https://huggingface.co/api/models/${spec.repo}`)
   if (!res.ok) throw new Error(`Hugging Face lookup failed for ${spec.repo} (${res.status})`)
-  const body = await res.json() as { siblings?: Array<{ rfilename: string; size?: number }> }
+  const body = await res.json() as { siblings?: Array<{ rfilename: string; size?: number; lfs?: { oid?: string } }> }
+  const pick = (s: { rfilename: string; size?: number; lfs?: { oid?: string } }): ResolvedHfFile => ({ file: s.rfilename, ...(s.size !== undefined ? { size: s.size } : {}), ...(s.lfs?.oid ? { sha256: s.lfs.oid } : {}) })
   const ggufs = (body.siblings ?? []).filter(s => s.rfilename.endsWith('.gguf'))
   if (spec.file) {
     const exact = ggufs.find(s => s.rfilename === spec.file)
     if (!exact) throw new Error(`${spec.repo} has no ${spec.file} (available: ${ggufs.map(s => s.rfilename).join(', ') || 'none'})`)
-    return { file: exact.rfilename, ...(exact.size !== undefined ? { size: exact.size } : {}) }
+    return pick(exact)
   }
   if (spec.quant) {
     const tagged = ggufs.filter(s => s.rfilename.toLowerCase().includes(spec.quant!.toLowerCase()))
-    if (tagged.length === 1) return { file: tagged[0]!.rfilename, ...(tagged[0]!.size !== undefined ? { size: tagged[0]!.size } : {}) }
+    if (tagged.length === 1) return pick(tagged[0]!)
     if (tagged.length > 1) throw new Error(`quant '${spec.quant}' is ambiguous in ${spec.repo}: ${tagged.map(s => s.rfilename).join(', ')}`)
     throw new Error(`no file matching quant '${spec.quant}' in ${spec.repo} (available: ${ggufs.map(s => s.rfilename).join(', ') || 'none'})`)
   }
-  if (ggufs.length === 1) return { file: ggufs[0]!.rfilename, ...(ggufs[0]!.size !== undefined ? { size: ggufs[0]!.size } : {}) }
+  if (ggufs.length === 1) return pick(ggufs[0]!)
   throw new Error(`${spec.repo} has ${ggufs.length} GGUF files — specify one: ${ggufs.map(s => s.rfilename).join(', ')}`)
 }
 
@@ -131,6 +146,7 @@ export async function downloadModel(dataDir: string, spec: ModelSpec & { kind: '
   const tmp = `${dest}.part-${process.pid}`
   const total = Number(res.headers.get('content-length') ?? 0) || undefined
   let downloaded = 0
+  const hash = createHash('sha256')
   const file = createWriteStream(tmp)
   try {
     const reader = res.body.getReader()
@@ -138,11 +154,13 @@ export async function downloadModel(dataDir: string, spec: ModelSpec & { kind: '
       const { done, value } = await reader.read()
       if (done) break
       downloaded += value.length
+      hash.update(value)
       file.write(value)
       options.onProgress?.({ downloaded, ...(total !== undefined ? { total } : {}) })
     }
     file.end()
     await new Promise<void>((resolve, reject) => { file.on('finish', () => resolve()); file.on('error', reject) })
+    if (resolved.sha256 && hash.digest('hex') !== resolved.sha256) throw new Error(`integrity check failed for ${resolved.file} (Hugging Face lfs sha256 mismatch) — deleted; retry the pull`)
     await rename(tmp, dest)
   } catch (error) {
     await rm(tmp, { force: true })
@@ -164,6 +182,8 @@ export interface RuntimeStartOptions {
   modelPath: string
   alias: string
   port: number
+  /** For the orphan-adoption pidfile (default ~/.config/sam-mesh). */
+  dataDir?: string
   contextSize?: number
   gpuLayers?: number
   extraArgs?: string[]
@@ -180,15 +200,13 @@ export class LlamaRuntime {
 
   async start(readyTimeoutMs = 120_000): Promise<void> {
     if (this.#child) return
-    // Pre-bind check: a busy port otherwise surfaces as a cryptic startup exit.
-    try {
-      const probe = await import('node:net').then(({ createServer }) => new Promise((resolve, reject) => {
-        const s = createServer()
-        s.once('error', reject)
-        s.listen(this.options.port, '127.0.0.1', () => s.close(() => resolve(undefined)))
-      }))
-      void probe
-    } catch { throw new Error(`port ${this.options.port} is already in use — pick another runtime port`) }
+    if (!await this.#portFree()) {
+      // A stale pidfile + a live llama-server on this port = orphaned child of a
+      // crashed dsh. Adopt: terminate it and take the port back.
+      if (await this.#reclaimOrphan()) {
+        // reclaimed
+      } else throw new Error(`port ${this.options.port} is already in use by a non-llama process — pick another runtime port`)
+    }
     const args = [
       '--model', this.options.modelPath,
       '--alias', this.options.alias,
@@ -206,6 +224,8 @@ export class LlamaRuntime {
     child.stderr?.on('data', (d: Buffer) => log(d.toString().trim()))
     child.on('exit', () => { this.#child = undefined })
     this.#startedAt = Date.now()
+    await mkdir(join(this.#pidfile(), '..'), { recursive: true })
+    await writeFile(this.#pidfile(), JSON.stringify({ pid: child.pid, model: this.options.modelPath, port: this.options.port, startedAt: new Date(this.#startedAt).toISOString() }))
     const deadline = Date.now() + readyTimeoutMs
     for (;;) {
       if (!this.#child) throw new Error('llama-server exited during startup — check the model file and runtime logs')
@@ -217,6 +237,36 @@ export class LlamaRuntime {
       await new Promise(r => setTimeout(r, 500))
     }
   }
+
+  async #portFree(): Promise<boolean> {
+    return import('node:net').then(({ createServer }) => new Promise<boolean>((resolve) => {
+      const s = createServer()
+      s.once('error', () => resolve(false))
+      s.listen(this.options.port, '127.0.0.1', () => s.close(() => resolve(true)))
+    }))
+  }
+
+  /** Kill a stale llama-server holding our port (pidfile + process identity check). */
+  async #reclaimOrphan(): Promise<boolean> {
+    const pidfile = this.#pidfile()
+    let pid: number
+    try { pid = JSON.parse(await readFile(pidfile, 'utf8')).pid } catch { return false }
+    if (!Number.isInteger(pid)) return false
+    try { process.kill(pid, 0) } catch { return false }
+    if (!await isLlamaServer(pid)) return false
+    this.options.onLog?.(`reclaiming port ${this.options.port} from orphaned llama-server (pid ${pid})`)
+    try { process.kill(pid, 'SIGTERM') } catch { return false }
+    const deadline = Date.now() + 4000
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0) } catch { return true }
+      await new Promise(r => setTimeout(r, 200))
+    }
+    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+    await new Promise(r => setTimeout(r, 300))
+    return this.#portFree()
+  }
+
+  #pidfile(): string { return join(this.options.dataDir ?? join(process.env.HOME ?? '', '.config', 'sam-mesh'), 'runtime', `llama-${this.options.port}.json`) }
 
   status(): RuntimeStatus {
     return this.#child

@@ -60,6 +60,12 @@ export interface DoctorInputs {
   serviceCount?: number | undefined
   /** Own services registered with the local node. */
   localServiceCount?: number | undefined
+  /** Vendored llama.cpp runtime tag, or null when unavailable. */
+  runtimeTag?: string | null | undefined
+  /** Model-store summary. */
+  modelStore?: { count: number; bytes: number } | undefined
+  /** Serve-row states from the status files (empty when none). */
+  serveRows?: Array<{ name: string; state: string; detail?: string | undefined }> | undefined
 }
 
 /** Each failed check carries the exact next command — doctor is advice, not just status. */
@@ -85,10 +91,18 @@ export function buildChecks(input: DoctorInputs): DoctorCheck[] {
   })
   checks.push({
     name: 'remote services visible',
-    ok: (input.serviceCount ?? 0) > 0,
-    detail: `${input.serviceCount ?? 0} discoverable`,
-    fix: (input.serviceCount ?? 0) > 0 ? undefined : 'nothing to call yet — other peers announce nothing (or you are alone)',
+    ok: true,
+    detail: `${input.serviceCount ?? 0} discoverable — strangers owe you nothing; a healthy consumer can see zero`,
   })
+  if (input.runtimeTag !== undefined) {
+    checks.push({ name: 'vendored llama.cpp runtime', ok: input.runtimeTag !== null, fix: input.runtimeTag === null ? 'reinstall @morewax/sam-mesh with its platform packages (optionalDependencies), or serve an external backend' : undefined })
+  }
+  if (input.modelStore !== undefined) {
+    checks.push({ name: 'model store', ok: true, fix: undefined, detail: `${input.modelStore.count} model${input.modelStore.count === 1 ? '' : 's'}, ${(input.modelStore.bytes / 1e9).toFixed(1)} GB` })
+  }
+  for (const row of input.serveRows ?? []) {
+    checks.push({ name: `serve row '${row.name}'`, ok: row.state === 'serving', detail: row.detail, fix: row.state === 'error' ? `fix the serve row config (Agent Mesh card → Share models) — last error: ${row.detail ?? 'unknown'}` : row.state === 'starting' ? 'model still loading — check again shortly' : undefined })
+  }
   return checks
 }
 

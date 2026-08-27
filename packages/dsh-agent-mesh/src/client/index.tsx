@@ -233,7 +233,7 @@ function ServeSection({api}:{api:MeshWebApi}) {
  const act=async(f:()=>Promise<ActionResult>)=>{ const r=await f(); setNotice(r.ok?r.message:r.error); await load() }
  return <>
   <div style={fieldRow}><div><div>Share models with the fleet</div><small style={{opacity:0.65}}>
-   {status.running?`Serving ${status.models.length} model${status.models.length===1?"":"s"} as ${status.announceName}`:status.configured?"Configured — applies on restart":"Off — models stay local"}
+   {status.rowState==="error"?`Serve error — ${status.rowDetail}`:status.rowState==="starting"?`Starting — ${status.rowDetail}`:status.running?`Serving ${status.models.length} model${status.models.length===1?"":"s"} as ${status.announceName}`:status.configured?"Configured — applies on restart":"Off — models stay local"}
    {present.length>0?` — detected: ${present.map(b=>b.name).join(", ")}`:" — no local backend detected"}</small></div></div>
   {status.running&&status.models.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>{status.models.slice(0,12).map(m=><code key={m} style={{fontSize:11,padding:"2px 6px",border:"1px solid var(--border,#444)",borderRadius:6}}>{m}</code>)}{status.models.length>12&&<small style={{opacity:0.65}}>+{status.models.length-12} more</small>}</div>}
   <div style={fieldRow}><div><div>Source</div><small style={{opacity:0.65}}>Serve an existing backend, or a model on the built-in runtime</small></div>

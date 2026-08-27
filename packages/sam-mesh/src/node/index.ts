@@ -1,3 +1,4 @@
 export * from './manager.js'
 export * from './inference-proxy.js'
 export * from './llama-runtime.js'
+export * from './serve-status.js'
