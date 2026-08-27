@@ -42,7 +42,8 @@
     "acceptance": "bash acceptance/run.sh local",
     "acceptance:two-node": "bash acceptance/run.sh two-node",
     "acceptance:k8s": "bash acceptance/run.sh k8s",
-    "smoke:tasks": "bash acceptance/task-service-smoke.sh"
+    "smoke:tasks": "bash acceptance/task-service-smoke.sh",
+    "dev": "tsdown --watch"
   },
   "dependencies": {
     "@morewax/sam-mesh": "workspace:*",

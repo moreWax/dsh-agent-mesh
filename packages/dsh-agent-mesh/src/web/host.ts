@@ -447,5 +447,6 @@ export class AgentMeshWebHost extends TypertRemoteService {
       return { ok: true, message: request.enabled ? `Serve row written (${next?.target} as ${next?.announceName}) — restart dsh to apply` : "Serve row removed — restart dsh to apply", value: { restartRequired: true } }
     } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
   }
+    // scaffold-anchor: host-method (scaffold-remote inserts before this line)
 }
 

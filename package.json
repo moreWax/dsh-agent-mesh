@@ -9,6 +9,9 @@
     "fetch:binaries": "node scripts/fetch-sam-binaries.mjs && node scripts/fetch-llama-binaries.mjs",
     "setup": "node scripts/setup.mjs",
     "start": "node scripts/start.mjs",
-    "sam-mesh": "node packages/sam-mesh/lib/cli/index.mjs"
+    "sam-mesh": "node packages/sam-mesh/lib/cli/index.mjs",
+    "dev": "pnpm -r --parallel run dev",
+    "check:fresh": "node scripts/check-build-fresh.mjs",
+    "scaffold:remote": "node scripts/scaffold-remote.mjs"
   }
 }
