@@ -24,7 +24,9 @@ export function MeshSettingsCard({api}:{api:MeshWebApi}) { const [s,setS]=useSta
  <div><button style={button} onClick={()=>void load()}>Check connection</button>{" "}<button style={button} onClick={()=>void act(()=>api.startNode(approve()))}>Start node (approved)</button>{" "}<button style={button} onClick={()=>void api.deviceFlowInstructions().then(x=>setNotice(x.join("\n")))}>Enrollment instructions</button></div>
  <NodeSection api={api} onChanged={load}/>
  {s&&<><dl><dt>Transport</dt><dd>{s.transport.kind}: {s.transport.endpoint}</dd><dt>Peer ID / router / peers / DHT / token / connectivity</dt><dd><Json value={{mesh:s.mesh,network:s.network,token:s.token}}/></dd></dl>
- {(["services","tools","models","failures","tasks","logs"] as const).map(k=><details key={k}><summary>{k} ({s[k].length})</summary><Json value={s[k]}/></details>)}<small>Captured {s.capturedAt}</small></>}
+ {(["services","tools","models","failures","tasks","logs"] as const).map(k=><details key={k}><summary>{k} ({s[k].length})</summary><Json value={s[k]}/></details>)}
+ {(s.services.length===0||s.tools.length===0)&&<p><small>Nothing here usually means one of: the swarm has no other enrolled peers announcing right now; a peer you expect is running a stale identity (hub key rotation — its node needs a restart, <code>sam-mesh node start</code> now self-heals via the stored refresh token); or you are looking at the server itself — a node never consumes its own services, they are for the other fleet members.</small></p>}
+ <small>Captured {s.capturedAt}</small></>}
  <details><summary>Approved actions</summary><ActionForms api={api} run={act}/><p>No reset, purge, delete, cancellation, or other destructive action is exposed.</p></details></section> }
 
 function isActionResult(v:EnrollmentInfo|ActionResult):v is ActionResult { return "ok" in v }

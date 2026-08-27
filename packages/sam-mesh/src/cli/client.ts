@@ -94,7 +94,14 @@ export async function runClient(args: string[]): Promise<void> {
       return
     }
     case "services": {
-      print(await sam.discoverRemoteServices(parseJson(rest[1], {})))
+      if (rest[1]) { print(await sam.discoverRemoteServices(parseJson(rest[1], {}))); return }
+      // No filter: the upstream schema requires `type`, so the full phone
+      // book = mcp + inference merged (a2a is post-alpha.7).
+      const [mcp, inference] = await Promise.all([
+        sam.discoverRemoteServices({ type: "mcp" }),
+        sam.discoverRemoteServices({ type: "inference" }).catch(() => []),
+      ])
+      print([...mcp, ...inference])
       return
     }
     case "tools": {

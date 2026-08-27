@@ -120,7 +120,7 @@ describe('stale-identity self-heal', () => {
 
   it('start() self-heals a stale identity: refresh → reset → re-join with JWT → running', async () => {
     const result = await manager().start()
-    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(`expected ok: ${result.error}`)
     expect(result.message).toContain('self-healed')
     const order = (await readFile(join(dir, 'data/.stub-order'), 'utf8')).trim().split('\n')
     expect(order).toEqual(['run', 'reset', 'run'])  // failed start, then reset, then the jwt re-join
@@ -134,7 +134,7 @@ describe('stale-identity self-heal', () => {
   it('refresh-token rejection falls back to a human reason, never throws', async () => {
     grantBehavior = 'reject'
     const result = await manager().start()
-    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected failure')
     expect(result.error).toContain('automatic re-enrollment failed')
     expect(result.error).toContain('refresh token rejected')
     expect(result.error).toContain('invalid_grant')
@@ -142,7 +142,7 @@ describe('stale-identity self-heal', () => {
 
   it('no stored refresh token → clear device-flow guidance', async () => {
     const result = await manager({ refresh_token: null, oidc_issuer: null, oidc_client_id: null }).start()
-    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected failure')
     expect(result.error).toContain('no stored refresh token')
     expect(result.error).toContain('sam-mesh node join')
   })
@@ -167,7 +167,7 @@ exit 1
       oidc_client_id: 'sam-mesh-audience',
     }, { samNode: other, dataDir: join(dir, 'data-other') })
     const result = await m.start()
-    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected failure')
     expect(result.error).toContain('address already in use')
     expect(result.error).not.toContain('automatic re-enrollment')
     expect(grantBody).toBe('')  // never touched the OIDC server
