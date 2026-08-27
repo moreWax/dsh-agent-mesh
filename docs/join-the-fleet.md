@@ -106,3 +106,15 @@ sam-mesh tail <peer-prefix> <task-id>
 # stranger sim — expect "capability required" through the public relay:
 sam-mesh call <peer-prefix> task_get '{"taskId":"x"}' --capability wrong
 ```
+
+## Repo checkouts: the CLI
+
+From a git checkout the `sam-mesh` bin is not on your PATH — run it through pnpm from the repo root:
+
+```bash
+pnpm sam-mesh node status        # = node packages/sam-mesh/lib/cli/index.mjs …
+pnpm sam-mesh node stop && pnpm sam-mesh node start
+pnpm sam-mesh doctor
+```
+
+(npm-installed setups get a real `sam-mesh` on PATH instead.)
