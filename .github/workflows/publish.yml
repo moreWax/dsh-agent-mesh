@@ -28,6 +28,7 @@ jobs:
       # packages BEFORE publish (bin/ is gitignored; the npm tarball carries
       # them so users never download anything at install time).
       - run: node scripts/fetch-sam-binaries.mjs
+      - run: node scripts/fetch-llama-binaries.mjs
       # pnpm publishes in dependency order (platform packages + sam-mesh
       # before dsh-agent-mesh) and rewrites workspace:* at pack time.
       - run: pnpm -r publish --access public --no-git-checks --provenance

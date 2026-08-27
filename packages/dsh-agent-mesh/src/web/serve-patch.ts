@@ -6,6 +6,9 @@ export interface ServeRowConfig {
   announceName: string
   upstreamAuthCredentialRef: string
   modelAllowlist: string[]
+  /** Built-in vendored runtime: 'org/repo:quant' etc. When set, target is ignored (the runtime IS the backend). */
+  runtimeModel: string
+  runtimeAlias: string
 }
 
 export const SERVE_BLOCK_BEGIN = '# BEGIN agent-mesh-inference (managed by the agent-mesh card — edit there, not by hand)'
@@ -18,6 +21,8 @@ export const DEFAULT_SERVE_CONFIG: ServeRowConfig = {
   announceName: 'dsh-mesh-inference',
   upstreamAuthCredentialRef: '',
   modelAllowlist: [],
+  runtimeModel: '',
+  runtimeAlias: '',
 }
 
 function renderBlock(config: ServeRowConfig): string {
@@ -27,11 +32,15 @@ function renderBlock(config: ServeRowConfig): string {
     "    - id: agent-mesh-inference",
     "      name: '@morewax/dsh-agent-mesh/inference/serve'",
     '      config:',
-    `        target: ${config.target}`,
-    '        host: 127.0.0.1',
-    `        port: ${config.port}`,
-    `        announceName: ${config.announceName}`,
   ]
+  if (config.runtimeModel) {
+    lines.push('        runtime:')
+    lines.push(`          model: ${config.runtimeModel}`)
+    if (config.runtimeAlias) lines.push(`          alias: ${config.runtimeAlias}`)
+  } else {
+    lines.push(`        target: ${config.target}`)
+  }
+  lines.push('        host: 127.0.0.1', `        port: ${config.port}`, `        announceName: ${config.announceName}`)
   if (config.upstreamAuthCredentialRef) lines.push(`        upstreamAuthCredentialRef: ${config.upstreamAuthCredentialRef}`)
   if (config.modelAllowlist.length > 0) lines.push(`        modelAllowlist: [${config.modelAllowlist.join(', ')}]`)
   lines.push(SERVE_BLOCK_END)
@@ -55,6 +64,8 @@ export function readServeConfig(patch: string): ServeRowConfig | null {
     announceName: grab('announceName') ?? DEFAULT_SERVE_CONFIG.announceName,
     upstreamAuthCredentialRef: grab('upstreamAuthCredentialRef') ?? '',
     modelAllowlist: (grab('modelAllowlist') ?? '').replace(/^\[|\]$/g, '').split(',').map(s => s.trim()).filter(Boolean),
+    runtimeModel: grab('model') ?? '',
+    runtimeAlias: grab('alias') ?? '',
   }
 }
 

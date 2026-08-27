@@ -6,8 +6,11 @@ import { generatePairKeys, open } from "@morewax/sam-mesh"
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-export interface ServeStatusView { configured: boolean; target: string; port: number; announceName: string; modelAllowlist: string[]; running: boolean; models: string[]; backends: Array<{ name: string; url: string; present: boolean }> }
-export interface ServeConfigureRequest { enabled: boolean; target?: string; announceName?: string; modelAllowlist?: string[] }
+export interface ServeStatusView { configured: boolean; target: string; port: number; announceName: string; modelAllowlist: string[]; runtimeModel: string; running: boolean; models: string[]; backends: Array<{ name: string; url: string; present: boolean }> }
+export interface ServeConfigureRequest { enabled: boolean; target?: string; announceName?: string; modelAllowlist?: string[]; runtimeModel?: string; runtimeAlias?: string }
+export interface RuntimeStatusView { available: boolean; tag?: string; error?: string; models: Array<{ file: string; bytes: number }> }
+export interface RuntimePullView { sessionId: string }
+export interface RuntimePullStatusView { state: 'running' | 'done' | 'failed'; downloaded: number; total?: number; path?: string; error?: string }
 import { homedir } from "node:os"
 import { credentialRef } from "@deepseek-ai/dsh-credentials"
 import type { NodeOwnership } from "../index.js"
@@ -161,6 +164,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
 
   // ─── join a fleet FROM this machine (the complete-UI path) ──────────────
 
+  private readonly pullSessions = new Map<string, RuntimePullStatusView>()
   private readonly pairSessions = new Map<string, { fleet: string; requestId: string; state: "waiting" | "complete" | "failed"; error?: string; notes?: string[]; privateKey: import("node:crypto").KeyObject; timer: ReturnType<typeof setInterval> }>()
 
   /** Browse fleets in the swarm: service names with provider counts. Ungated
@@ -334,7 +338,42 @@ export class AgentMeshWebHost extends TypertRemoteService {
     } catch { /* not serving right now */ }
     const { WELL_KNOWN_BACKENDS, probeBackend } = await import("@morewax/sam-mesh/node")
     const backends = await Promise.all(WELL_KNOWN_BACKENDS.map(async b => ({ ...b, present: await probeBackend(b).catch(() => false) })))
-    return { configured: readServeConfig(existing) !== null, target: config.target, port: config.port, announceName: config.announceName, modelAllowlist: config.modelAllowlist, running, models, backends }
+    return { configured: readServeConfig(existing) !== null, target: config.target, port: config.port, announceName: config.announceName, modelAllowlist: config.modelAllowlist, runtimeModel: config.runtimeModel, running, models, backends }
+  }
+
+  /** Vendored-runtime facts for the card: binary availability + model store. Ungated read. */
+  @Remote("runtimeStatus") async runtimeStatus(): Promise<RuntimeStatusView> {
+    const { resolveVendoredLlama, listModelStore } = await import("@morewax/sam-mesh/node")
+    const dataDir = join(homedir(), ".config", "sam-mesh")
+    const models = await listModelStore(dataDir)
+    try { const v = await resolveVendoredLlama(dataDir); return { available: true, tag: v.tag, models } }
+    catch (error) { return { available: false, error: error instanceof Error ? error.message : String(error), models } }
+  }
+
+  /** Download a HF model into the store. Explicit + approved (network + GBs). Boot code never downloads. */
+  @Remote("runtimePull") async runtimePull(request: { model: string }, approval: ApprovedAction): Promise<RuntimePullView> {
+    if (!approval.approved || !approval.approvedBy?.trim()) throw new Error("Explicit approval and approver name are required.")
+    const sessionId = randomBytes(6).toString("hex")
+    this.pullSessions.set(sessionId, { state: "running", downloaded: 0 })
+    void (async () => {
+      const { parseModelSpec, downloadModel } = await import("@morewax/sam-mesh/node")
+      const dataDir = join(homedir(), ".config", "sam-mesh")
+      try {
+        const spec = parseModelSpec(request.model)
+        if (spec.kind !== "hf") throw new Error("pull needs a Hugging Face ref (org/repo[:quant])")
+        const session = this.pullSessions.get(sessionId)!
+        const done = await downloadModel(dataDir, spec, { onProgress: (p) => { session.downloaded = p.downloaded; if (p.total !== undefined) session.total = p.total } })
+        session.state = "done"; session.path = done.path
+      } catch (error) { this.pullSessions.set(sessionId, { state: "failed", downloaded: 0, error: error instanceof Error ? error.message : String(error) }) }
+    })()
+    return { sessionId }
+  }
+
+  /** Watch a pull. Ungated read. */
+  @Remote("runtimePullStatus") async runtimePullStatus(sessionId: string): Promise<RuntimePullStatusView> {
+    const session = this.pullSessions.get(sessionId)
+    if (!session) return { state: "failed", downloaded: 0, error: "unknown session" }
+    return { ...session }
   }
 
   /** Enable/update/disable the serve row. Writes the managed patch block; a restart applies it. */
@@ -347,7 +386,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
       const { readServeConfig, writeServeConfig, DEFAULT_SERVE_CONFIG } = await import("./serve-patch.js")
       const current = readServeConfig(existing) ?? { ...DEFAULT_SERVE_CONFIG }
       const next = request.enabled
-        ? { ...current, enabled: true, target: request.target?.trim() || current.target, announceName: request.announceName?.trim() || current.announceName, modelAllowlist: request.modelAllowlist ?? current.modelAllowlist }
+        ? { ...current, enabled: true, target: request.target?.trim() || current.target, announceName: request.announceName?.trim() || current.announceName, modelAllowlist: request.modelAllowlist ?? current.modelAllowlist, runtimeModel: request.runtimeModel?.trim() ?? current.runtimeModel, runtimeAlias: request.runtimeAlias?.trim() ?? current.runtimeAlias }
         : null
       await mkdir(join(patchPath, ".."), { recursive: true })
       await writeFile(patchPath, writeServeConfig(existing, next))

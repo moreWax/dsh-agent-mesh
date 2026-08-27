@@ -109,6 +109,14 @@ importers:
         specifier: ^2.8.0
         version: 2.9.0
 
+  packages/llama-cpp-darwin-arm64: {}
+
+  packages/llama-cpp-darwin-x64: {}
+
+  packages/llama-cpp-linux-arm64: {}
+
+  packages/llama-cpp-linux-x64: {}
+
   packages/sam-mesh:
     devDependencies:
       '@types/node':
@@ -124,6 +132,18 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(yaml@2.9.0)
     optionalDependencies:
+      '@morewax/llama-cpp-darwin-arm64':
+        specifier: workspace:*
+        version: link:../llama-cpp-darwin-arm64
+      '@morewax/llama-cpp-darwin-x64':
+        specifier: workspace:*
+        version: link:../llama-cpp-darwin-x64
+      '@morewax/llama-cpp-linux-arm64':
+        specifier: workspace:*
+        version: link:../llama-cpp-linux-arm64
+      '@morewax/llama-cpp-linux-x64':
+        specifier: workspace:*
+        version: link:../llama-cpp-linux-x64
       '@morewax/sam-node-darwin-arm64':
         specifier: workspace:*
         version: link:../sam-node-darwin-arm64

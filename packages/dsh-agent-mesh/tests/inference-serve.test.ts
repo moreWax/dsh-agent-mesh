@@ -59,3 +59,23 @@ describe('agent-mesh-inference serve row', () => {
     up.server.close()
   })
 })
+
+
+describe('serve row runtime validation', () => {
+  it('rejects target AND runtime together', async () => {
+    const { ctx } = mockCtx('cap')
+    await expect(apply(ctx as any, { target: 'http://127.0.0.1:1', runtime: { model: 'org/repo' } })).rejects.toThrow(/mutually exclusive/)
+  })
+  it('treats a model-less runtime object as absent (schemastery materializes all-defaulted objects)', async () => {
+    const { ctx } = mockCtx('cap')
+    await expect(apply(ctx as any, { runtime: {} })).rejects.toThrow(/target.*or.*runtime|serving is always explicit/)
+  })
+  it('rejects a runtime model that is not in the store (boot never downloads)', async () => {
+    const { ctx } = mockCtx('cap')
+    await expect(apply(ctx as any, { runtime: { model: 'definitely/not-a-real-repo-xyz:Q8_0' } })).rejects.toThrow()
+  })
+  it('rejects a missing GGUF path', async () => {
+    const { ctx } = mockCtx('cap')
+    await expect(apply(ctx as any, { runtime: { model: '/no/such/model.gguf' } })).rejects.toThrow(/not found/)
+  })
+})

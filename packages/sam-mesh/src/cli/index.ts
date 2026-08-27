@@ -19,6 +19,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { stdout as out, stdin as inp, stdout, stderr, exit, argv } from 'node:process'
 import { createInterface } from 'node:readline/promises'
 import { runClient } from './client.js'
@@ -26,6 +27,44 @@ import { SamNodeManager, DEFAULT_CONTROL_PLANE } from '../node/index.js'
 import { INSTALL_INSTRUCTION, QR_MISSING_HINT, SAM_INSTALL_CMD, buildChecks, expandPeer, formatMintBlock, formatSshHandoff, nextJoinStep, renderDoctor } from './plan.js'
 import { AGENT_SKILL } from './skill-doc.js'
 import { runFleet } from './fleet.js'
+
+async function runRuntime(args: string[]): Promise<void> {
+  const sub = args[0]
+  const dataDir = process.env.SAM_DATA_DIR ?? `${process.env.HOME}/.config/sam-mesh`
+  const rt = await import('../node/llama-runtime.js')
+  if (sub === 'status' || sub === undefined) {
+    try {
+      const v = await rt.resolveVendoredLlama(dataDir)
+      stdout.write(`vendored runtime: llama.cpp ${v.tag} (${v.binary})\n`)
+    } catch (error) { stdout.write(`vendored runtime: unavailable — ${error instanceof Error ? error.message : String(error)}\n`) }
+    const models = await rt.listModelStore(dataDir)
+    stdout.write(models.length === 0 ? 'model store: empty\n' : `model store (${dataDir}/models):\n`)
+    for (const m of models) stdout.write(`  ${(m.bytes / 1e9).toFixed(2)} GB  ${m.file}\n`)
+    return
+  }
+  if (sub === 'models') {
+    for (const m of await rt.listModelStore(dataDir)) stdout.write(`${(m.bytes / 1e9).toFixed(2)} GB  ${m.file}\n`)
+    return
+  }
+  if (sub === 'pull') {
+    const specArg = args[1]
+    if (!specArg) { stderr.write('Usage: sam-mesh runtime pull \'<org/repo[:quant|/file.gguf]>\'\n'); exit(2) }
+    const spec = rt.parseModelSpec(specArg)
+    if (spec.kind !== 'hf') { stderr.write('pull needs a Hugging Face ref (org/repo[:quant]); paths need no pull.\n'); exit(2) }
+    const resolved = await rt.resolveHfFile(spec)
+    const dest = rt.modelStorePath(dataDir, spec.repo, resolved.file)
+    if (existsSync(dest)) { stdout.write(`already in store: ${dest}\n`); return }
+    stdout.write(`pulling ${spec.repo}/${resolved.file}${resolved.size !== undefined ? ` (${(resolved.size / 1e9).toFixed(2)} GB)` : ''} …\n`)
+    let last = 0
+    const done = await rt.downloadModel(dataDir, spec, { onProgress: (p) => {
+      const pct = p.total ? Math.round((p.downloaded / p.total) * 100) : 0
+      if (pct >= last + 10) { last = pct; stdout.write(`  ${pct}% (${(p.downloaded / 1e9).toFixed(2)} GB)\n`) }
+    } })
+    stdout.write(`stored: ${done.path} (${(done.bytes / 1e9).toFixed(2)} GB)\nServe it: sam-mesh inference-proxy with a runtime serve row, or the card → Share models.\n`)
+    return
+  }
+  stderr.write('Usage: sam-mesh runtime <status|models|pull>\n'); exit(2)
+}
 
 async function runInferenceProxy(args: string[]): Promise<void> {
   const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
@@ -227,6 +266,8 @@ Node kit:
   node join [--control-plane] device-flow enrollment; prints URL + code
 
 Serve inference on the mesh:
+  runtime status|models           vendored llama.cpp + local model store
+  runtime pull '<repo:quant>'     download a GGUF into the store (explicit, network)
   inference-proxy --target <url> [--port 4100] [--announce-name <n>]
                           loopback gate proxy: models listing open, execution
                           requires the fleet capability (env SAM_INFERENCE_CAPABILITY,
@@ -307,6 +348,7 @@ else if (command === 'doctor') {
 else if (command === 'fleet') await runFleet(rest)
 else if (command === 'skill') stdout.write(AGENT_SKILL + '\n')
 else if (command === 'node') await runNode(rest)
+else if (command === 'runtime') await runRuntime(rest)
 else if (command === 'inference-proxy') await runInferenceProxy(rest)
 else if (CLIENT_COMMANDS.has(command)) await runClient([command, ...rest])
 else { stderr.write(`Unknown command: ${command}\n`); exit(2) }

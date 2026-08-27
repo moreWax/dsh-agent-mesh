@@ -57,6 +57,10 @@
     "@morewax/sam-node-darwin-arm64": "workspace:*",
     "@morewax/sam-node-darwin-x64": "workspace:*",
     "@morewax/sam-node-linux-x64": "workspace:*",
-    "@morewax/sam-node-linux-arm64": "workspace:*"
+    "@morewax/sam-node-linux-arm64": "workspace:*",
+    "@morewax/llama-cpp-darwin-arm64": "workspace:*",
+    "@morewax/llama-cpp-darwin-x64": "workspace:*",
+    "@morewax/llama-cpp-linux-x64": "workspace:*",
+    "@morewax/llama-cpp-linux-arm64": "workspace:*"
   }
 }

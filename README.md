@@ -173,6 +173,34 @@ re-announces every 30s, so node restarts self-heal. dsh restarts take the
 proxy down with them — run dsh under a service manager for a permanent serve
 side.
 
+**Nothing installed at all?** The package carries a vendored llama.cpp
+runtime (official ggml-org release b10642, per-platform, integrity-checked —
+same doctrine as the vendored sam-node). Pick **Built-in runtime** in the
+card's Share-models section, enter a Hugging Face model
+(`org/repo`, `org/repo:quant`, or `org/repo/file.gguf`), and select Download
+— an explicit, approved download into the local store (boot code never
+downloads). Then Start sharing: dsh boots the runtime with the model, gates
+it, and announces it. On the CLI:
+
+```bash
+node packages/sam-mesh/lib/cli/index.mjs runtime status
+node packages/sam-mesh/lib/cli/index.mjs runtime pull 'unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0'
+```
+
+The serve-row form (what the card writes) is:
+
+```yaml
+- insert:
+    - id: agent-mesh-inference
+      name: '@morewax/dsh-agent-mesh/inference/serve'
+      config:
+        runtime:
+          model: unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0
+          alias: smollm2-135m
+          port: 8180
+        announceName: my-models
+```
+
 No dsh on the serving machine? The standalone CLI does the same job:
 
 ```bash

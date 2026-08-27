@@ -29,3 +29,14 @@ describe('serve-patch managed block', () => {
     expect(readServeConfig('- insert:\n    - id: agent-mesh-inference\n      config:\n        target: http://x\n')).toBeNull()
   })
 })
+
+
+describe('serve-patch runtime mode', () => {
+  it('renders and reads back a runtime block; runtime suppresses target', () => {
+    const text = writeServeConfig('', { ...CONFIG, runtimeModel: 'org/repo:Q8_0', runtimeAlias: 'smol' })
+    expect(text).toContain('runtime:')
+    expect(text).toContain('model: org/repo:Q8_0')
+    expect(text).not.toContain('target: auto')
+    expect(readServeConfig(text)).toMatchObject({ runtimeModel: 'org/repo:Q8_0', runtimeAlias: 'smol' })
+  })
+})
