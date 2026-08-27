@@ -232,14 +232,28 @@ async function runNode(args: string[]): Promise<void> {
       const bootstrapToken = bootstrapTokenPath !== undefined
         ? (await readFile(bootstrapTokenPath!, 'utf8')).trim()
         : undefined
-      const session = nodes.beginEnrollment({ controlPlane, ...(bootstrapToken !== undefined ? { bootstrapToken } : {}) })
-      stderr.write(`Enrollment session ${session.sessionId} — waiting for the device flow...\n`)
-      while (session.state === 'starting') await new Promise((r) => setTimeout(r, 200))
-      if (session.state === 'awaiting_user') {
-        stdout.write(`\nOpen this URL in a browser:\n\n  ${session.verificationUrl}\n\nEnter code: ${session.userCode}\n\nWaiting for authorization...\n`)
+      // The public hub's device flow is flaky in one specific way: the token
+      // poll can die on a bare 401 (no OAuth error body — upstream surfaces
+      // it verbatim) before/around approval. Every observed case succeeds on
+      // a fresh code, so retry that failure class exactly once.
+      const transient = (error: string | null | undefined): boolean =>
+        error != null && /token request failed with status: 401|request was aborted/i.test(error)
+      let session = nodes.beginEnrollment({ controlPlane, ...(bootstrapToken !== undefined ? { bootstrapToken } : {}) })
+      for (let attempt = 1; ; attempt++) {
+        stderr.write(`Enrollment session ${session.sessionId} — waiting for the device flow...\n`)
+        while (session.state === 'starting') await new Promise((r) => setTimeout(r, 200))
+        if (session.state === 'awaiting_user') {
+          stdout.write(`\nOpen this URL in a browser:\n\n  ${session.verificationUrl}\n\nEnter code: ${session.userCode}\n\nWaiting for authorization...\n`)
+        }
+        process.once('SIGINT', () => { session.cancel(); stderr.write('\nEnrollment cancelled.\n') })
+        await session.done
+        if (attempt === 1 && session.state === 'failed' && transient(session.error)) {
+          stderr.write(`Device flow hiccup (${session.error}) — retrying once with a fresh code.\n`)
+          session = nodes.beginEnrollment({ controlPlane, ...(bootstrapToken !== undefined ? { bootstrapToken } : {}) })
+          continue
+        }
+        break
       }
-      process.once('SIGINT', () => { session.cancel(); stderr.write('\nEnrollment cancelled.\n') })
-      await session.done
       if (session.state === 'complete') {
         stdout.write('Enrolled.\n')
         const started = await confirm('Start the node now?', true)
