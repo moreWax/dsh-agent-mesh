@@ -10,7 +10,6 @@ import remoteContribution from "../remote.js"
 import type { ActionResult, ApprovedAction, MeshDashboardSnapshot } from "../web/host.js"
 import type { ServiceRegistrationRequest, SkillInstallRequest } from "../operator/index.js"
 import type { EnrollmentInfo } from "@morewax/sam-mesh/node"
-import type { DoctorCheck } from "@morewax/sam-mesh/plan"
 import type { NodeStatusView, ServeStatusView, ServeConfigureRequest, RuntimeStatusView, RuntimePullStatusView } from "../web/host.js"
 export interface BinaryOptionsView { options: Array<{ path: string; source: "env"|"bundled"|"path"; suggested: boolean; tag?: string }>; selected: string; auto: boolean }
 export interface MeshWebApi { snapshot():Promise<MeshDashboardSnapshot>; check():Promise<MeshDashboardSnapshot>; startNode(a:ApprovedAction):Promise<ActionResult>; installSkill(r:SkillInstallRequest,a:ApprovedAction):Promise<ActionResult>; registerService(r:ServiceRegistrationRequest,a:ApprovedAction):Promise<ActionResult>; deviceFlowInstructions():Promise<string[]>; nodeStatus():Promise<NodeStatusView>; nodeBinaryOptions():Promise<BinaryOptionsView>; stopNode(a:ApprovedAction):Promise<ActionResult>; beginEnrollment(a:ApprovedAction,o?:{controlPlane?:string}):Promise<EnrollmentInfo|ActionResult>; enrollmentStatus(id:string):Promise<EnrollmentInfo|null>; activeEnrollment():Promise<EnrollmentInfo|null>; cancelEnrollment(id:string):Promise<ActionResult>; meshDoctor():Promise<{checks:DoctorCheck[]}>; pairRequests():Promise<{pairing:boolean;pending:{requestId:string;label:string;requestedAt:number}[]}>; approvePairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; rejectPairRequest(id:string,a:ApprovedAction):Promise<ActionResult>; fleetAdminRequests(q:{serviceName?:string;peerId?:string}):Promise<{ok:boolean;pending?:{requestId:string;label:string;requestedAt?:string}[];error?:string}>; fleetAdminApprove(q:{requestId:string;serviceName?:string;peerId?:string},a:ApprovedAction):Promise<ActionResult>; fleetAdminReject(q:{requestId:string;serviceName?:string;peerId?:string},a:ApprovedAction):Promise<ActionResult>; fleetDiscover():Promise<{fleets:{name:string;providers:number;peerIds:string[]}[];node:{running:boolean;enrolled:boolean;enrolledHub:string|null}}>; requestFleetPair(q:{serviceName:string;peerId?:string;label?:string},a:ApprovedAction):Promise<{sessionId?:string;ok:boolean;error?:string}>; fleetPairStatus(id:string):Promise<{state:string;fleet?:string;error?:string;notes?:string[]}>; inferenceServeStatus():Promise<ServeStatusView>; inferenceServeConfigure(r:ServeConfigureRequest,a:ApprovedAction):Promise<ActionResult>; runtimeStatus():Promise<RuntimeStatusView>; runtimePull(r:{model:string},a:ApprovedAction):Promise<{sessionId:string}>; runtimePullStatus(id:string):Promise<RuntimePullStatusView>; /* scaffold-anchor: api-type */ }
@@ -80,35 +79,122 @@ export function MeshSettingsCard({api}:{api:MeshWebApi}) { const [s,setS]=useSta
  const approve=()=>({approved:true,approvedBy:"DeepSeek Harness web user"}); const act=async(f:()=>Promise<ActionResult>)=>{const result=await f();setNotice(result.ok?result.message:result.error);await load()};
  return <section style={box} data-testid="agent-mesh-settings"><header><h2 style={{margin:0}}>Agent Mesh</h2><small>Read-only status; mutations run only after the button you select.</small></header>{error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
  <div><button style={button} onClick={()=>void load()}>Check connection</button>{" "}<button style={button} onClick={()=>void act(()=>api.startNode(approve()))}>Start node (approved)</button>{" "}<button style={button} onClick={()=>void api.deviceFlowInstructions().then(x=>setNotice(x.join("\n")))}>Enrollment instructions</button></div>
+ <WizardSection api={api} onChanged={load}/>
  <NodeSection api={api} onChanged={load}/>
  {s&&<><dl><dt>Transport</dt><dd>{s.transport.kind}: {s.transport.endpoint}</dd><dt>Peer ID / router / peers / DHT / token / connectivity</dt><dd><Json value={{mesh:s.mesh,network:s.network,token:s.token}}/></dd></dl>
- {(["services","tools","models","failures","tasks","logs"] as const).map(k=><details key={k}><summary>{k} ({s[k].length})</summary><Json value={s[k]}/></details>)}
+ <ChipSection kind="services" items={s.services}/>
+ <ChipSection kind="tools" items={s.tools}/>
+ <ModelRoster api={api} models={s.models}/>
+ {(["failures","tasks","logs"] as const).map(k=><details key={k}><summary>{k} ({s[k].length})</summary><Json value={s[k]}/></details>)}
  {(s.services.length===0||s.tools.length===0)&&<p><small>Nothing here usually means one of: the swarm has no other enrolled peers announcing right now; a peer you expect is running a stale identity (hub key rotation — its node needs a restart, <code>sam-mesh node start</code> now self-heals via the stored refresh token); or you are looking at the server itself — a node never consumes its own services, they are for the other fleet members.</small></p>}
  <small>Captured {s.capturedAt}</small></>}
  <details><summary>Approved actions</summary><ActionForms api={api} run={act}/><p>No reset, purge, delete, cancellation, or other destructive action is exposed.</p></details></section> }
+
+/** Snapshot services/tools as compact chips (name + one-line meta), raw JSON
+ * still one click away behind the advanced details. */
+function ChipSection({kind,items}:{kind:"services"|"tools";items:unknown[]}) {
+ return <div style={{display:"grid",gap:4}}>
+  <strong>{kind} ({items.length})</strong>
+  {items.length===0&&<small style={{opacity:0.65}}>none visible</small>}
+  {items.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+   {items.slice(0,40).map((x,i)=>{ const v=chipView(kind,x); return <span key={i} style={chip} title={v.meta||v.name}><code>{v.name}</code>{v.meta&&<small style={{opacity:0.7}}>{v.meta}</small>}</span> })}
+   {items.length>40&&<small style={{opacity:0.65}}>+{items.length-40} more</small>}
+  </div>}
+  <details><summary><small>advanced — raw JSON</small></summary><Json value={items}/></details>
+ </div> }
+
+/** Model roster: grouped by serving peer when the snapshot says who serves
+ * what; models this machine's own serve row announces carry a live badge. */
+function ModelRoster({api,models}:{api:MeshWebApi;models:unknown[]}) {
+ const [serve,setServe]=useState<{models:string[];rowState?:string|undefined;announceName:string}|null>(null)
+ useEffect(()=>{ let live=true; const load=async()=>{ try{ const s=await api.inferenceServeStatus(); if(live) setServe({models:s.models,rowState:s.rowState,announceName:s.announceName}) }catch{ if(live) setServe(null) } }
+  void load(); const t=setInterval(()=>void load(),5000); return ()=>{ live=false; clearInterval(t) } },[api])
+ const groups=groupModels(models,serve)
+ return <div style={{display:"grid",gap:4}}>
+  <strong>models ({models.length})</strong>
+  {models.length===0&&<small style={{opacity:0.65}}>none visible</small>}
+  {groups.map(g=><div key={g.name} style={{display:"grid",gap:4}}>
+   {(groups.length>1||g.name!=="mesh")&&<small style={{opacity:0.7}}>served by <code>{g.name}</code>{g.thisMachine?` (this machine${serve?.announceName?` \u00b7 ${serve.announceName}`:""})`:""}</small>}
+   <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+    {g.rows.map(r=><span key={r.id} style={chip}><code>{r.id}</code>{r.badge&&<small style={{color:r.badge==="error"?"var(--danger,#e57373)":r.badge==="warming"?"var(--warning,#ffb74d)":"var(--success,#4caf50)"}}>● {r.badge}</small>}</span>)}
+   </div>
+  </div>)}
+  <details><summary><small>advanced — raw JSON</small></summary><Json value={models}/></details>
+ </div> }
 
 function isActionResult(v:EnrollmentInfo|ActionResult):v is ActionResult { return "ok" in v }
 
 /** Mesh node kit: bring THIS machine onto the mesh — install check, daemon
  * lifecycle, and browser-based device-flow enrollment, all from the card. */
 
-/** Onboarding wizard: the web answer to "am I on the mesh?" — the same
- * checks as `sam-mesh doctor`, rendered as steps with per-failure fixes. */
-function WizardSection({api}:{api:MeshWebApi}) {
- const [checks,setChecks]=useState<DoctorCheck[]>()
- useEffect(()=>{ let live=true; const poll=async()=>{ try{ const r=await api.meshDoctor(); if(live) setChecks(r.checks) }catch{ if(live) setChecks(undefined) } }
-  void poll(); const t=setInterval(()=>void poll(),5000); return ()=>{ live=false; clearInterval(t) } },[api])
- if(!checks) return null
- const failures=checks.filter(c=>!c.ok).length
- return <div style={{border:"1px solid var(--border,#444)",borderRadius:8,padding:10}}>
-  <strong>Onboarding</strong>
-  <ol style={{margin:"6px 0 0",paddingLeft:20,display:"grid",gap:4}}>
-   {checks.map(c=><li key={c.name} style={{color:c.ok?"var(--success,#4caf50)":"var(--danger,#e57373)"}}>
-    {c.ok?"\u2713":"\u2717"} {c.name}{c.detail?` — ${c.detail}`:""}
-    {!c.ok&&c.fix&&<code style={{display:"block",opacity:0.8,marginTop:2}}>{c.fix}</code>}
-   </li>)}
-  </ol>
-  <small>{failures===0?"All checks pass — this machine is on the mesh.":`${failures} issue(s) — fixes above.`}</small>
+/** First-run wizard: a guided checklist that walks a brand-new machine to
+ * full fleet membership — enroll, run, join a fleet, see capability traffic.
+ * Every step derives from live state (nodeStatus / fleetDiscover /
+ * pairRequests / snapshot); the current step carries exactly one action. */
+function WizardSection({api,onChanged}:{api:MeshWebApi;onChanged?:()=>Promise<void>}) {
+ const [facts,setFacts]=useState<WizardFacts>({installed:false,enrolled:false,running:false,pairing:false})
+ const [loaded,setLoaded]=useState(false)
+ const [session,setSession]=useState<EnrollmentInfo|null>(null)
+ const [joined,setJoined]=useState<string>()
+ const [note,setNote]=useState("")
+ const approve=()=>({approved:true,approvedBy:"DeepSeek Harness web user"})
+ const poll=useCallback(async()=>{
+  let status:NodeStatusView|undefined
+  try{ status=await api.nodeStatus() }catch{ status=undefined }
+  const next:WizardFacts={installed:status?.installed??false,enrolled:status?.enrolled??false,running:status?.running??false,pairing:false}
+  if(status?.running){
+   const [d,p,s]=await Promise.allSettled([api.fleetDiscover(),api.pairRequests(),api.snapshot()])
+   if(d.status==="fulfilled") next.fleets=d.value.fleets
+   if(p.status==="fulfilled") next.pairing=p.value.pairing
+   if(s.status==="fulfilled"){ next.models=s.value.models.length; next.peers=peerCount(s.value.mesh); next.ownPeer=ownPeerId(s.value.mesh) }
+  }
+  setFacts(next); setLoaded(true)
+ },[api])
+ useEffect(()=>{ let live=true; const tick=async()=>{ await poll() }; void tick()
+  const t=setInterval(()=>{ if(live) void tick() },4000); return ()=>{ live=false; clearInterval(t) } },[poll])
+ // Resume an enrollment started earlier (auto-begin at boot, another tab, …).
+ useEffect(()=>{ let live=true; void api.activeEnrollment().then(info=>{ if(live&&info&&(info.state==="starting"||info.state==="awaiting_user")) setSession(info) }).catch(()=>undefined)
+  return ()=>{ live=false } },[api])
+ // Poll an in-flight enrollment until it resolves.
+ useEffect(()=>{ if(!session||(session.state!=="starting"&&session.state!=="awaiting_user")) return
+  const t=setInterval(async()=>{ try{ const info=await api.enrollmentStatus(session.sessionId)
+   if(info){ setSession(info); if(info.state==="complete"){ setNote("Enrolled \u2014 this machine is on the hub."); await poll(); await onChanged?.() } } }catch{ /* transient */ } },1500)
+  return ()=>clearInterval(t) },[session,api,poll,onChanged])
+ const begin=async()=>{ setNote(""); try{ const r=await api.beginEnrollment(approve()); if(isActionResult(r)) setNote(r.ok?r.message:r.error); else setSession(r) }catch(e){ setNote(e instanceof Error?e.message:String(e)) } }
+ const start=async()=>{ setNote(""); const r=await api.startNode(approve())
+  setNote(r.ok?r.message:`${r.error} \u2014 fix: run \`sam-mesh node start\` in a terminal to see the underlying error.`); await poll() }
+ const steps=wizardSteps({...facts,joinedFleet:joined})
+ const allDone=steps.every(s=>s.done)
+ const list=<ol style={{margin:0,paddingLeft:0,listStyle:"none",display:"grid",gap:8}}>
+  {steps.map(s=><li key={s.id}>
+   <div>{s.done?<span style={{color:"var(--success,#4caf50)"}}>✓</span>:s.current?<span>→</span>:<span style={{opacity:0.5}}>○</span>}{" "}{s.label}{s.done&&s.detail?` \u2014 ${s.detail}`:""}</div>
+   {s.current&&<div style={{margin:"4px 0 0 20px",display:"grid",gap:6}}>
+    {s.error&&<p role="alert" style={{margin:0}}>{s.error}{s.fix?` \u2014 fix: ${s.fix}`:""}</p>}
+    {!s.error&&s.detail&&<small style={{opacity:0.75}}>{s.detail}</small>}
+    {s.id==="enroll"&&facts.installed&&!session&&<div><button style={button} onClick={()=>void begin()}>Begin enrollment (approved)</button></div>}
+    {s.id==="enroll"&&session&&(session.state==="starting"||session.state==="awaiting_user")&&<div style={{...panel,border:"1px solid var(--accent,#6a9fff)"}}>
+     {session.mode==="bootstrap"?<p style={{margin:0}}>Enrolling with the stored pre-shared token — no browser step needed…</p>
+      :session.state==="starting"?<p style={{margin:0}}>Contacting the control plane…</p>
+      :<>
+       <p style={{margin:0}}><b>Authorize this machine</b> — open the link and enter the code:</p>
+       <p style={{margin:0,fontSize:15,wordBreak:"break-all"}}><a href={session.verificationUrl!} target="_blank" rel="noreferrer">{session.verificationUrl}</a>{" "}<CopyButton text={session.verificationUrl!}/></p>
+       <p style={{margin:0,fontSize:22,letterSpacing:3}}><b>{session.userCode}</b>{" "}<CopyButton text={session.userCode!}/></p>
+       <p role="status" style={{margin:0}}><small>Waiting for approval…</small></p>
+       <div><button style={button} onClick={()=>void api.cancelEnrollment(session.sessionId).then(()=>{ setSession(null); setNote("Enrollment cancelled") }).catch(()=>undefined)}>Cancel</button></div>
+      </>}
+    </div>}
+    {s.id==="enroll"&&session&&(session.state==="failed"||session.state==="cancelled")&&<p role="alert" style={{margin:0}}>Enrollment {session.state}{session.error?`: ${session.error}`:""} — fix: begin enrollment again; if it keeps failing, check the control plane URL in Settings \u2192 Plugins \u2192 Agent Mesh.{" "}<button style={button} onClick={()=>void begin()}>Try again</button></p>}
+    {s.id==="run"&&<div><button style={button} onClick={()=>void start()}>Start node (approved)</button></div>}
+    {s.id==="fleet"&&<JoinFleetSection api={api} onJoined={name=>{ setJoined(name); void onChanged?.() }}/>}
+    {s.id==="ready"&&<div style={{display:"grid",gap:6}}><small style={{opacity:0.75}}>The node is up but the card cannot see fleet activity yet — fleets appear once an operator announces services, or share your own models in Settings \u2192 Plugins \u2192 Agent Mesh.</small><div><button style={button} onClick={()=>void poll()}>Re-check</button></div></div>}
+   </div>}
+  </li>)}
+ </ol>
+ if(allDone) return <details style={panel}><summary style={{cursor:"pointer"}}><span style={{color:"var(--success,#4caf50)"}}>✓</span> On the mesh — {facts.peers??0} peers, {facts.models??0} models</summary><div style={{marginTop:8}}>{list}</div></details>
+ return <div style={panel}>
+  <strong>Get on the mesh</strong>
+  {!loaded?<small style={{opacity:0.7}}>Checking this machine…</small>:list}
+  {note&&<p role="status" style={{margin:0}}><small>{note}</small></p>}
  </div>
 }
 
@@ -121,13 +207,13 @@ type PairView = {sessionId:string;fleet:string;state:string;error?:string;notes?
 /** Join a fleet FROM this machine, entirely in the browser: discover fleets
  * in the swarm, request to pair, watch the operator's approval land. The
  * host owns keys, polling, sealed-invite opening, and provisioning. */
-function JoinFleetSection({api}:{api:MeshWebApi}) {
+function JoinFleetSection({api,onJoined}:{api:MeshWebApi;onJoined?:(fleet:string)=>void}) {
  const [result,setResult]=useState<{fleets:{name:string;providers:number;peerIds:string[]}[];node:{running:boolean;enrolled:boolean;enrolledHub:string|null}}>()
  const [session,setSession]=useState<PairView>()
  const [note,setNote]=useState("")
  const discover=async()=>{ setNote(""); try{ setResult(await api.fleetDiscover()) }catch(e){ setNote(e instanceof Error?e.message:String(e)) } }
  useEffect(()=>{ if(!session||session.state!=="waiting") return
-  const t=setInterval(async()=>{ const s=await api.fleetPairStatus(session.sessionId); setSession({...session,...s}) },2000)
+  const t=setInterval(async()=>{ const s=await api.fleetPairStatus(session.sessionId); setSession({...session,...s}); if(s.state==="complete"&&s.fleet) onJoined?.(s.fleet) },2000)
   return ()=>clearInterval(t) },[session?.sessionId,session?.state])
  const approve=()=>({approved:true,approvedBy:"DeepSeek Harness web user"})
  const request=async(serviceName:string)=>{ const r=await api.requestFleetPair({serviceName},approve())
@@ -200,42 +286,23 @@ function PairingSection({api}:{api:MeshWebApi}) {
 }
 
 function NodeSection({api,onChanged}:{api:MeshWebApi;onChanged:()=>Promise<void>}) {
- const [status,setStatus]=useState<NodeStatusView>(); const [session,setSession]=useState<EnrollmentInfo|null>(null)
+ const [status,setStatus]=useState<NodeStatusView>()
  const [note,setNote]=useState("")
  const refresh=useCallback(async()=>{ setStatus(await api.nodeStatus()) },[api])
  useEffect(()=>{ void refresh() },[refresh])
- useEffect(()=>{ void api.activeEnrollment().then(info=>{ if(info) setSession(info) }).catch(()=>undefined) },[api])
- // Poll an in-flight enrollment until it resolves.
- useEffect(()=>{ if(!session||(session.state!=="starting"&&session.state!=="awaiting_user")) return
-  const t=setInterval(async()=>{ const info=await api.enrollmentStatus(session.sessionId); if(info){ setSession(info); if(info.state==="complete"){ setNote("Enrolled — starting the node…"); await refresh(); await onChanged() } } },1500)
-  return ()=>clearInterval(t) },[session,api,refresh,onChanged])
  const approve=()=>({approved:true,approvedBy:"DeepSeek Harness web user"})
- const act=async(f:()=>Promise<ActionResult>)=>{ const r=await f(); setNote(r.ok?r.message:r.error); await refresh() }
- const begin=async()=>{ const r=await api.beginEnrollment(approve()); if(isActionResult(r)) setNote(r.ok?r.message:r.error); else setSession(r) }
+ const act=async(f:()=>Promise<ActionResult>)=>{ const r=await f(); setNote(r.ok?r.message:r.error); await refresh(); await onChanged() }
  if(!status) return null
  return <details open={!status.enrolled}><summary>Mesh node ({status.running?"running":status.enrolled?"enrolled, stopped":"not enrolled"})</summary>
   <div style={{display:"grid",gap:8,marginTop:8}}>
-   <WizardSection api={api}/>
    <PairingSection api={api}/>
    <FleetAdminSection api={api}/>
-   <JoinFleetSection api={api}/>
-   <p style={{margin:0,opacity:0.75}}>{status.running?(status.managedByDsh?"Started by dsh — stops automatically when dsh stops.":"Running independently of dsh — use Stop node to shut it down."):status.enrolled?"Stopped — Start node brings it up (dsh-managed).":"Not enrolled."}</p>
+   <p style={{margin:0,opacity:0.75}}>{status.running?(status.managedByDsh?"Started by dsh — stops automatically when dsh stops.":"Running independently of dsh — use Stop node to shut it down."):status.enrolled?"Stopped — Start node brings it up (dsh-managed).":"Not enrolled — the checklist above walks you through enrollment."}</p>
    <dl style={{margin:0}}><dt>Binary</dt><dd>{status.installed?status.binaryPath:"sam-node not found on PATH"}</dd><dt>Data dir</dt><dd>{status.dataDir}</dd>{status.pid!==null&&<><dt>PID</dt><dd>{status.pid}</dd></>}</dl>
    <div>
     {!status.running&&status.enrolled&&<button style={button} onClick={()=>void act(()=>api.startNode(approve()))}>Start node (approved)</button>}{" "}
-    {status.running&&<button style={button} onClick={()=>void act(()=>api.stopNode(approve()))}>Stop node (approved)</button>}{" "}
-    {!status.enrolled&&status.installed&&!session&&<button style={button} onClick={()=>void begin()}>Enroll this machine (approved)</button>}
+    {status.running&&<button style={button} onClick={()=>void act(()=>api.stopNode(approve()))}>Stop node (approved)</button>}
    </div>
-   {session&&(session.state==="starting"||session.state==="awaiting_user")&&<div style={{border:"1px solid var(--border,#444)",borderRadius:8,padding:12}}>
-    {session.mode==="bootstrap"?<p>Enrolling with the stored pre-shared token — no browser step needed…</p>
-     :session.state==="starting"?<p>Contacting the control plane…</p>:<>
-     <p style={{margin:"0 0 6px"}}><b>Authorize this machine:</b></p>
-     <p style={{margin:"0 0 6px"}}><a href={session.verificationUrl!} target="_blank" rel="noreferrer">{session.verificationUrl}</a></p>
-     <p style={{margin:"0 0 10px",fontSize:18,letterSpacing:2}}><b>{session.userCode}</b></p>
-     <button style={button} onClick={()=>void act(()=>api.cancelEnrollment(session.sessionId)).then(()=>setSession(null))}>Cancel enrollment</button>
-    </>}
-   </div>}
-   {session&&(session.state==="failed"||session.state==="cancelled")&&<p role="alert">Enrollment {session.state}{session.error?`: ${session.error}`:""}</p>}
    {note&&<p role="status">{note}</p>}
   </div></details> }
 

@@ -27,11 +27,12 @@ jobs:
       - run: pnpm run -r typecheck
       - run: pnpm run -r test
       - run: pnpm run -r build
-      # Vendor the checksum-verified sam-node binaries into the platform
-      # packages BEFORE publish (bin/ is gitignored; the npm tarball carries
-      # them so users never download anything at install time).
-      - run: node scripts/fetch-sam-binaries.mjs
-      - run: node scripts/fetch-llama-binaries.mjs
+      # Vendor the binaries into the platform packages BEFORE publish (bin/
+      # is gitignored; the npm tarball carries them so users never download
+      # anything at install time). sam-node is BUILT from the pinned commit
+      # (setup-go above); llama.cpp is downloaded from the pinned upstream
+      # release (TOFU manifest).
+      - run: pnpm fetch:binaries
       # pnpm publishes in dependency order (platform packages + sam-mesh
       # before dsh-agent-mesh) and rewrites workspace:* at pack time.
       - run: pnpm -r publish --access public --no-git-checks --provenance

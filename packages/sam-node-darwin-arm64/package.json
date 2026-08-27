@@ -1,6 +1,6 @@
 {
   "name": "@morewax/sam-node-darwin-arm64",
-  "version": "0.1.0-alpha.7",
+  "version": "0.2.0-ci.6502323",
   "description": "Bundled sam-node binary (darwin/arm64) for @morewax/sam-mesh \u2014 official google/sam release artifact, checksum-verified at pack time.",
   "license": "Apache-2.0",
   "os": [
