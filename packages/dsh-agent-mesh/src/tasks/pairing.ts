@@ -61,8 +61,16 @@ export class PairingStore {
     return [...this.requests.values()].filter(r => !r.sealedInvite)
   }
 
+  /** The pending request a handler is about to approve (swept, not sealed). */
+  peek(requestId: string): PairRequest | undefined {
+    this.sweep()
+    const r = this.requests.get(requestId)
+    return r && !r.sealedInvite ? r : undefined
+  }
+
   /** Gated (operator): approve = seal the invite to the requester's key. */
   approve(requestId: string, inviteJson: string, approvedBy: string): PairRequest | undefined {
+    // (kept sync for the store; the tool handler resolves async inviteFor first)
     this.sweep()
     const r = this.requests.get(requestId)
     if (!r || r.sealedInvite) return undefined
@@ -91,7 +99,7 @@ export class PairingStore {
 interface PairingCapable {
   tools: { register(tool: ToolDescriptor): unknown }
   pairing?: PairingStore | undefined
-  pairInviteFor?: (() => string) | undefined
+  pairInviteFor?: ((label: string) => string | Promise<string>) | undefined
 }
 
 /** Protocol errors keep the exact pre-module codes/messages (pinned by tests). */
@@ -100,7 +108,7 @@ function pairError(code: string, message: string, retryable: boolean): TaskProto
 }
 
 /** The five pairing tools. request/poll are open BY DESIGN — see file header. */
-export function pairingTools(store: PairingStore, inviteFor: () => string): ToolDescriptor[] {
+export function pairingTools(store: PairingStore, inviteFor: (label: string) => string | Promise<string>): ToolDescriptor[] {
   const obj = (required: string[], properties: Record<string, unknown>): Record<string, unknown> =>
     ({ type: 'object', required, properties, additionalProperties: false })
   const requestId = { requestId: { type: 'string', minLength: 1 } }
@@ -126,7 +134,11 @@ export function pairingTools(store: PairingStore, inviteFor: () => string): Tool
       schema: obj(['requestId'], { ...requestId, approvedBy: { type: 'string' } }),
       handler: async (args: JsonObject) => {
         if (typeof args.requestId !== 'string') throw pairError('TASK_PROTOCOL_INVALID_REQUEST', 'requestId is required', false)
-        const approved = store.approve(args.requestId, inviteFor(), typeof args.approvedBy === 'string' && args.approvedBy.trim() ? args.approvedBy : 'operator')
+        const request = store.peek(args.requestId)
+        if (!request) throw pairError('TASK_PAIRING_UNKNOWN', 'No pending request with that id (expired, approved, or unknown)', false)
+        // Mint first (async), then seal — the invite carries the member capability.
+        const invite = await inviteFor(request.label)
+        const approved = store.approve(args.requestId, invite, typeof args.approvedBy === 'string' && args.approvedBy.trim() ? args.approvedBy : 'operator')
         if (!approved) throw pairError('TASK_PAIRING_UNKNOWN', 'No pending request with that id (expired, approved, or unknown)', false)
         return { approved: true, requestId: approved.requestId, label: approved.label }
       } },
@@ -137,7 +149,7 @@ export function pairingTools(store: PairingStore, inviteFor: () => string): Tool
 }
 
 /** Mount fleet pairing on any registry-bearing service. One line, full onboarding. */
-export function withPairing<T extends PairingCapable>(service: T, options: { store?: PairingStore; inviteFor: () => string }): T {
+export function withPairing<T extends PairingCapable>(service: T, options: { store?: PairingStore; inviteFor: (label: string) => string | Promise<string> }): T {
   const store = options.store ?? new PairingStore()
   for (const tool of pairingTools(store, options.inviteFor)) service.tools.register(tool)
   // Attach so in-process operator surfaces (the web card) share the exact

@@ -33,10 +33,10 @@ describe('CapabilityAuthorizer', () => {
     const wrong = gate.check(tool('capability'), {}, { capability: 'nope' })
     expect(missing).toEqual(wrong)
   })
-  it('runAuthorizers short-circuits on first denial', () => {
+  it('runAuthorizers short-circuits on first denial', async () => {
     const calls: string[] = []
     const spy = (name: string, allow: boolean) => ({ name, check: () => { calls.push(name); return allow ? { allow: true as const } : { allow: false as const, message: name } } })
-    const verdict = runAuthorizers([spy('a', true), spy('b', false), spy('c', true)], tool('capability'), {}, {})
+    const verdict = await runAuthorizers([spy('a', true), spy('b', false), spy('c', true)], tool('capability'), {}, {})
     expect(verdict).toEqual({ allow: false, message: 'b' })
     expect(calls).toEqual(['a', 'b']) // c never ran
   })

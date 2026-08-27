@@ -79,9 +79,69 @@ describe('inference proxy (http)', () => {
 
     proxy.close(); upstream.close()
   })
-})
 
+  it('per-member tokens: members execute, wrong-scope members 403, operator still works', async () => {
+    const seen: unknown[] = []
+    const upstream = createServer((req, res) => { seen.push(req.url); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') })
+    const upstreamUrl = await listen(upstream)
+    const logs: string[] = []
+    const proxy = createInferenceProxyServer({
+      host: '127.0.0.1', port: 0, target: upstreamUrl,
+      requiredCapability: () => 'shared-op-secret',
+      gateTokens: () => [
+        { token: 'mac-cap', member: 'macbook', scopes: ['tasks', 'inference'] },
+        { token: 'tasks-only-cap', member: 'macbook-tasks-only', scopes: ['tasks'] },
+      ],
+      onLog: line => logs.push(line),
+    })
+    const proxyUrl = await listen(proxy)
+
+    // member with inference scope executes
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'mac-cap' }, body: '{"model":"m"}' })).status).toBe(200)
+    expect(logs.some(l => l.includes('EXEC') && l.includes('member=macbook'))).toBe(true)
+
+    // member WITHOUT inference scope is denied with a scope-annotated log
+    const before = logs.length
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'tasks-only-cap' }, body: '{}' })).status).toBe(403)
+    expect(logs.slice(before).some(l => l.includes('DENY') && l.includes('scope'))).toBe(true)
+
+    // the shared secret still works (operator, migration posture)
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'shared-op-secret' }, body: '{}' })).status).toBe(200)
+    expect(logs.some(l => l.includes('operator'))).toBe(true)
+
+    // revocation = token set drops the member on the next request
+    let revoked = false
+    const gate = () => {
+      const tokens: { token: string; member?: string; scopes?: string[] }[] = [
+        { token: 'mac-cap', member: 'macbook', scopes: ['inference'] },
+      ]
+      if (!revoked) tokens.push({ token: 'gone-cap', member: 'gone', scopes: ['inference'] })
+      return tokens
+    }
+    const proxy2 = createInferenceProxyServer({ host: '127.0.0.1', port: 0, target: upstreamUrl, requiredCapability: () => '', gateTokens: gate })
+    const url2 = await listen(proxy2)
+    expect((await fetch(`${url2}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'gone-cap' }, body: '{}' })).status).toBe(200)
+    revoked = true
+    expect((await fetch(`${url2}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'gone-cap' }, body: '{}' })).status).toBe(403)
+
+    proxy.close(); proxy2.close(); upstream.close()
+  })
+
+  it('bounds the buffered body: 413 past the cap', async () => {
+    const upstream = createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') })
+    // an allowlist forces the buffering path
+    const proxy = createInferenceProxyServer({
+      host: '127.0.0.1', port: 0, target: await listen(upstream),
+      requiredCapability: 'cap', modelAllowlist: ['tiny'], maxBodyBytes: 64,
+    })
+    const proxyUrl = await listen(proxy)
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap' }, body: JSON.stringify({ model: 'tiny', pad: 'x'.repeat(200) }) })).status).toBe(413)
+    // under the cap still flows
+    expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap' }, body: '{"model":"tiny"}' })).status).toBe(200)
+    proxy.close(); upstream.close()
+  })
 describe('startAnnounceLoop', () => {
+
   it('registers as SERVICE_TYPE_INFERENCE and re-announces until stopped', async () => {
     const calls: unknown[] = []
     const stop = startAnnounceLoop({
@@ -212,4 +272,6 @@ describe('allowlist helpers', () => {
     expect(filterModelList({ object: 'list', data: [{ id: 'a' }, { id: 'b' }, { noId: true }] }, ['a'])).toEqual({ object: 'list', data: [{ id: 'a' }] })
     expect(filterModelList({ nope: 1 }, ['a'])).toBeUndefined()
   })
+})
+
 })

@@ -288,7 +288,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const tasks = this.taskService()
     if (!tasks?.pairing) return { ok: false, error: "Pairing is not armed on this machine (no capability gate configured)" }
     try {
-      const approved = tasks.pairApprove(requestId, approval.approvedBy.trim())
+      const approved = await tasks.pairApprove(requestId, approval.approvedBy.trim())
       return { ok: true, message: `Approved '${approved.label}' — invite sealed and delivered` }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
@@ -337,6 +337,27 @@ export class AgentMeshWebHost extends TypertRemoteService {
     try {
       await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_reject`, arguments: { _capability: provider.capability, requestId: request.requestId } })
       return { ok: true, message: "Request rejected" }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  /** Fleet members and their scopes (operator). Capabilities are never returned by the service. */
+  @Remote("fleetAdminMembers") async fleetAdminMembers(request: { serviceName?: string; peerId?: string } = {}): Promise<{ ok: boolean; members?: { id: string; name: string; scopes: string[]; createdAt: string; note?: string }[]; error?: string }> {
+    const provider = await this.fleetAdminProvider(request)
+    if (typeof provider === "string") return { ok: false, error: provider }
+    try {
+      const result = await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_member_list`, arguments: { _capability: provider.capability } }) as { members?: { id: string; name: string; scopes: string[]; createdAt: string; note?: string }[] }
+      return { ok: true, members: Array.isArray(result?.members) ? result.members : [] }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  /** Revoke a fleet member — their capability fails on the next gated call (operator). */
+  @Remote("fleetAdminRevoke") async fleetAdminRevoke(request: { id: string; serviceName?: string; peerId?: string }, approval: ApprovedAction): Promise<ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const provider = await this.fleetAdminProvider(request)
+    if (typeof provider === "string") return { ok: false, error: provider }
+    try {
+      await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_member_revoke`, arguments: { _capability: provider.capability, id: request.id } })
+      return { ok: true, message: `Member ${request.id} revoked — capability fails on the next gated call` }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
 

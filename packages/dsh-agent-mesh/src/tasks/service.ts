@@ -144,7 +144,7 @@ export class TaskService {
   readonly tools = new ToolRegistry()
   /** Attached by withPairing; undefined when pairing is not mounted. */
   pairing: import('./pairing.js').PairingStore | undefined
-  pairInviteFor: (() => string) | undefined
+  pairInviteFor: ((label: string) => string | Promise<string>) | undefined
 
   constructor(readonly store: TaskStore, readonly executor: TaskExecutor, options: TaskServiceOptions = {}) {
     this.concurrency = options.concurrency ?? 4
@@ -258,8 +258,13 @@ export class TaskService {
 
   /** Operator surfaces (web card, in-process callers) — same store the mesh tools use. */
   pairPending(): import('./pairing.js').PairRequest[] { return this.requirePairing().pending() }
-  pairApprove(requestId: string, approvedBy: string): { requestId: string; label: string } {
-    const approved = this.requirePairing().approve(requestId, this.pairInviteFor!(), approvedBy)
+  async pairApprove(requestId: string, approvedBy: string): Promise<{ requestId: string; label: string }> {
+    const store = this.requirePairing()
+    const request = store.peek(requestId)
+    if (!request) throw protocol('TASK_PAIRING_UNKNOWN', 'No pending request with that id (expired, approved, or unknown)')
+    // Mint first (async member registry), then seal — the invite carries the member capability.
+    const invite = await this.pairInviteFor!(request.label)
+    const approved = store.approve(requestId, invite, approvedBy)
     if (!approved) throw protocol('TASK_PAIRING_UNKNOWN', 'No pending request with that id (expired, approved, or unknown)')
     return { requestId: approved.requestId, label: approved.label }
   }

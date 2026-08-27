@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { FleetMemberRegistry } from '../src/tasks/members.js'
 import { generatePairKeys, open, seal } from '@morewax/sam-mesh'
 import { PairingStore, withPairing } from '../src/tasks/pairing.js'
 import { InMemoryTaskStore, TaskService, type TaskExecutor } from '../src/tasks/service.js'
@@ -71,5 +75,33 @@ describe('pairing over HTTP with the capability gate on', () => {
       const approve = await call('fleet_pair_approve', { requestId: 'rj-0123456789abcdef', approvedBy: 'xor', _capability: 'fleet-secret' })
       expect((approve.result?.structuredContent as { approved: boolean }).approved).toBe(true)
     } finally { await server.stop() }
+  })
+})
+
+
+describe('pairing mints per-member capabilities', () => {
+  it('approve seals a MEMBER capability, never the shared secret; the member lands in the registry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pair-'))
+    const registry = new FleetMemberRegistry(join(dir, 'fleet-members.json'))
+    const shared = 'shared-operator-secret'
+    const service = new TaskService(new InMemoryTaskStore(), { async execute(task) { return task.input ?? null } })
+    withPairing(service, {
+      inviteFor: async (label: string) => JSON.stringify({
+        version: 1, controlPlane: 'https://hub.sam-mesh.dev', serviceName: 'dsh-task-service',
+        capability: (await registry.add(label || 'fleet-member', ['tasks', 'inference'], 'paired')).capability,
+      }),
+    })
+    const { publicKeyX, privateKey } = generatePairKeys()
+    service.pairing!.request('r2-0123456789abcdef', publicKeyX, 'macbook')
+    await service.pairApprove('r2-0123456789abcdef', 'xor')
+    const delivered = service.pairing!.poll('r2-0123456789abcdef') as { state: string; sealed: import('@morewax/sam-mesh').SealedPayload }
+    expect(delivered.state).toBe('approved')
+    const invite = JSON.parse(open(delivered.sealed!, privateKey)) as { capability: string }
+    expect(invite.capability).not.toBe(shared)
+    expect(invite.capability).toMatch(/^[0-9a-f]{48}$/)
+    const members = await registry.list()
+    expect(members).toHaveLength(1)
+    expect(members[0]!.name).toBe('macbook')
+    expect((await registry.identify(invite.capability, shared))?.member).toBe('macbook')
   })
 })

@@ -16,6 +16,8 @@ export interface TaskHttpServerOptions { host?: string; port?: number; path?: st
    * execution and data, not the existence of the tool roster.
    */
   capability?: string
+  /** Attribution sink: every tools/call verdict lands here (tool, member when identified, allowed). Never arguments. */
+  onAudit?: (event: { tool: string; allowed: boolean; member?: string }) => void
   /** Authorization chain; runs in order against each tool's declared auth. */
   authorizers?: Authorizer[] }
 export interface TaskHttpAddress { host: string; port: number; mcpUrl: string; healthUrl: string }
@@ -44,7 +46,8 @@ export class TaskHttpServer {
         // Credentials leave the arguments at the edge; handlers never see them.
         const { args, ctx: authCtx } = extractCredentials({ ...((msg.params?.arguments ?? {}) as JsonObject) })
         const authorizers = this.options.authorizers ?? (this.options.capability !== undefined ? [new CapabilityAuthorizer(this.options.capability)] : [])
-        const verdict = runAuthorizers(authorizers, tool, args, authCtx)
+        const verdict = await runAuthorizers(authorizers, tool, args, authCtx)
+        this.options.onAudit?.({ tool: name, allowed: verdict.allow, ...(verdict.allow && verdict.member ? { member: verdict.member } : {}) })
         if (!verdict.allow) {
           return send(res,200,{jsonrpc:'2.0',id:msg.id??null,error:{code:-32602,message:verdict.message}})
         }

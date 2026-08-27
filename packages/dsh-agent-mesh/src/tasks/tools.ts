@@ -28,6 +28,8 @@ export interface ToolDescriptor {
   /** JSON Schema for the arguments object; advertised verbatim via tools/list. */
   schema: Record<string, unknown>
   auth: ToolAuth
+  /** Scopes that authorize this tool (capability auth only; default: the owning service scope). */
+  requiredScopes?: string[]
   handler(args: JsonObject, ctx: ToolContext): Promise<unknown>
 }
 

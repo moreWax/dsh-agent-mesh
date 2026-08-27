@@ -8,13 +8,17 @@ import type { AgentMeshService } from '../index.js'
 import { InMemoryTaskStore, TaskService, type TaskExecutor } from './service.js'
 import { SQLiteTaskStore } from './sqlite.js'
 import { withPairing } from './pairing.js'
+import { MemberAuthorizer, ToolAllowlistAuthorizer, type Authorizer } from './authz.js'
+import { FleetMemberRegistry, defaultMembersPath, type FleetScope } from './members.js'
+import { withMemberTools } from './member-tools.js'
 import { TaskHttpServer } from './http.js'
+import { CapabilityAuthorizer } from './authz.js'
 import { SamTaskRegistrationClient } from './registration.js'
 export const name='agent-mesh-task-service'
 export const inject=['agentMesh','credentials']
-export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean }
+export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean; memberCredentials?: boolean; membersPath?: string; memberScopes?: FleetScope[]; legacySharedCapability?: boolean; toolAllowlist?: string[] }
 export const DEFAULT_TASK_DB = '~/.dsh/storages/agent-mesh-task-service/tasks.db'
-export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default(''),pairing:z.boolean().default(true),pairControlPlane:z.string().default('https://hub.sam-mesh.dev'),pairAnnouncePrivate:z.boolean().default(false)}) as unknown as z<Config>
+export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default(''),pairing:z.boolean().default(true),pairControlPlane:z.string().default('https://hub.sam-mesh.dev'),pairAnnouncePrivate:z.boolean().default(false),memberCredentials:z.boolean().default(true),membersPath:z.string().default(defaultMembersPath()),memberScopes:z.array(z.union(['tasks','inference','admin'])).default(['tasks','inference']),legacySharedCapability:z.boolean().default(true),toolAllowlist:z.array(z.string()).default([])}) as unknown as z<Config>
 declare module '@deepseek-ai/cordis' { interface Context { agentMeshTaskService: TaskService } }
 export const provide=['agentMeshTaskService']
 function resolveDbPath(value: string): string {
@@ -49,14 +53,47 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
   // invite to the requester's ephemeral key. Only meaningful with a gate:
   // an open service has no secret to deliver.
   const service=new TaskService(store,executor)
+  // Per-member capabilities: pairing now MINTS a member capability (scopes
+  // from memberScopes) instead of handing out the shared secret; the shared
+  // capability stays valid as the OPERATOR credential while
+  // legacySharedCapability holds (the migration posture). Revocation is
+  // registry deletion — effective on the next gated call, here and at every
+  // inference gate reading the same registry file.
+  const members = config.memberCredentials === false ? undefined : new FleetMemberRegistry(config.membersPath ?? defaultMembersPath())
   if (config.pairing !== false && capability !== undefined) {
-    withPairing(service, { inviteFor: () => JSON.stringify({
-      version: 1, controlPlane: config.pairControlPlane ?? 'https://hub.sam-mesh.dev',
-      serviceName: config.serviceName ?? 'dsh-task-service', capability: capability ?? '',
-      announcePrivate: config.pairAnnouncePrivate ?? false, createdAt: new Date().toISOString(),
-    }) })
+    withPairing(service, {
+      // The invite seals a MEMBER capability — the shared secret never
+      // leaves this machine again. inviteFor may be async (the registry
+      // write) and receives the requester's label for attribution.
+      inviteFor: async (label: string) => {
+        const member = await members?.add(label || 'fleet-member', (config.memberScopes ?? ['tasks','inference']) as FleetScope[], 'paired')
+        return JSON.stringify({
+          version: 1, controlPlane: config.pairControlPlane ?? 'https://hub.sam-mesh.dev',
+          serviceName: config.serviceName ?? 'dsh-task-service',
+          capability: member?.capability ?? capability ?? '',
+          ...(member ? { memberId: member.id, memberName: member.name, scopes: member.scopes } : {}),
+          announcePrivate: config.pairAnnouncePrivate ?? false, createdAt: new Date().toISOString(),
+        })
+      },
+    })
   }
-  const server=new TaskHttpServer(service,{...config,...(capability!==undefined?{capability}:{})}); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
+  if (members) withMemberTools(service, members)
+  // Authorization chain: member identification + scopes first, then the
+  // fleet-facing tool allowlist. With no members configured this is exactly
+  // the legacy posture (shared capability everywhere).
+  const authorizers: Authorizer[] = []
+  if (members) authorizers.push(new MemberAuthorizer(
+    async () => (await members.list()).map(m => ({ capability: m.capability, name: m.name, scopes: m.scopes })),
+    config.legacySharedCapability === false ? undefined : capability,
+  ))
+  else if (capability !== undefined) authorizers.push(new CapabilityAuthorizer(capability))
+  if (config.toolAllowlist?.length) authorizers.push(new ToolAllowlistAuthorizer(config.toolAllowlist))
+  const server=new TaskHttpServer(service,{
+    ...config,
+    ...(capability!==undefined?{capability}:{}),
+    ...(authorizers.length?{authorizers}:{}),
+    onAudit: event => console.info(`[agent-mesh-task-service] [fleet-audit] ${event.tool} ${event.allowed ? 'allowed' : 'DENIED'}${event.member ? ` member=${event.member}` : ''}`),
+  }); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<SamTaskRegistrationClient['register']>>|undefined
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)
   let retryTimer:ReturnType<typeof setInterval>|undefined

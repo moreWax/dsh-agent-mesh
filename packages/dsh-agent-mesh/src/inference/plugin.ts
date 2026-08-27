@@ -8,6 +8,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-credentials/types'
 import { createInferenceProxyServer, startAnnounceLoop } from '@morewax/sam-mesh/node'
 import type { AgentMeshService } from '../index.js'
+import { FleetMemberRegistry, defaultMembersPath } from '../tasks/members.js'
 
 export const name = 'agent-mesh-inference'
 export const inject = ['agentMesh', 'credentials']
@@ -41,6 +42,13 @@ export interface Config {
   capabilityRefreshMs?: number
   /** Curate which backend models the mesh may see and run. Empty = everything the backend advertises. */
   modelAllowlist?: string[]
+  /** Per-member gate credentials from the shared registry (default on). */
+  memberCredentials?: boolean
+  membersPath?: string
+  /** Accept the shared secret as the operator credential (default true — migration posture). */
+  legacySharedCapability?: boolean
+  /** Cap on the buffered request body (default 10 MiB). */
+  maxBodyBytes?: number
 }
 export const Config: z<Config> = z.object({
   target: z.string(),
@@ -60,6 +68,10 @@ export const Config: z<Config> = z.object({
   announceIntervalMs: z.number().min(1000).default(30_000),
   capabilityRefreshMs: z.number().min(1000).default(60_000),
   modelAllowlist: z.array(z.string()).default([]),
+  memberCredentials: z.boolean().default(true),
+  membersPath: z.string().default(defaultMembersPath()),
+  legacySharedCapability: z.boolean().default(true),
+  maxBodyBytes: z.natural(),
 }) as unknown as z<Config>
 
 type ServeContext = Context & { agentMesh: AgentMeshService }
@@ -158,10 +170,25 @@ async function applyInner(ctx: ServeContext, config: Config, statusName: string,
   if (!target) throw new Error('agent-mesh-inference: no backend resolved (unreachable — config validated target or runtime)')
   // The gate compares against the CURRENT value; the refresh interval bounds
   // the rotation window. Empty capability => every gated path 403s (fail closed).
+  // Per-member credentials: the shared registry file feeds the token set
+  // (members + the shared secret as operator while legacy acceptance holds);
+  // revocation is registry deletion, effective on the next request.
+  const members = config.memberCredentials === false
+    ? undefined
+    : new FleetMemberRegistry(config.membersPath ?? defaultMembersPath())
   const server = createInferenceProxyServer({
     host, port, target,
     ...(upstreamAuth ? { upstreamAuth } : {}),
     requiredCapability: () => capability,
+    ...(members ? {
+      gateTokens: async () => [
+        ...(await members.list())
+          .filter(m => m.scopes.includes('inference') || m.scopes.length === 0)
+          .map(m => ({ token: m.capability, member: m.name, scopes: m.scopes })),
+        ...(config.legacySharedCapability === false ? [] : [{ token: capability, member: 'operator', scopes: [] }]),
+      ],
+    } : {}),
+    ...(config.maxBodyBytes ? { maxBodyBytes: config.maxBodyBytes } : {}),
     ...(config.modelAllowlist?.length ? { modelAllowlist: config.modelAllowlist } : {}),
     onLog: log,
   })
