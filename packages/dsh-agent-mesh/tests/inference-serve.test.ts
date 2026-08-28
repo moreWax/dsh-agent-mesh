@@ -23,6 +23,7 @@ function mockCtx(capability: string | undefined) {
       core: { requestRaw: vi.fn(async (_path: string, opts: { body?: unknown }) => { registrations.push(opts.body); return { status: 200, body: (async function*(){})() } }) },
     },
     credentials: { resolve: vi.fn(async () => undefined) },
+    inject: vi.fn(), // no task service in the mock: steering tools simply don't mount
     effect: vi.fn((fn: () => () => void) => { effects.push(fn()) }),
   }
   return { ctx, effects, registrations }

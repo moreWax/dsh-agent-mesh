@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-credentials/types'
 import { createInferenceProxyServer, startAnnounceLoop } from '@morewax/sam-mesh/node'
 import type { AgentMeshService } from '../index.js'
 import { FleetMemberRegistry, defaultMembersPath } from '../tasks/members.js'
+import { steeringTools } from './steering.js'
 
 export const name = 'agent-mesh-inference'
 export const inject = ['agentMesh', 'credentials']
@@ -189,6 +190,9 @@ async function applyInner(ctx: ServeContext, config: Config, statusName: string,
       ],
     } : {}),
     ...(config.maxBodyBytes ? { maxBodyBytes: config.maxBodyBytes } : {}),
+    // Live steering: the inference_steer tool (mounted on the task service by
+    // this row's machine) writes this file; the gate merges it per request.
+    steerFile: join(dataDir, `steer-${statusName}.json`),
     ...(config.modelAllowlist?.length ? { modelAllowlist: config.modelAllowlist } : {}),
     onLog: log,
   })
@@ -199,6 +203,17 @@ async function applyInner(ctx: ServeContext, config: Config, statusName: string,
     const { writeServeStatus } = await import('@morewax/sam-mesh/node')
     await writeServeStatus(dataDir, { state: 'serving', name: statusName, mode: 'external', detail: `external backend ${target}`, target }).catch(() => undefined)
   }
+
+  // Live steering tools: mounted on the fleet task service when this machine
+  // hosts one (the chat pattern — the row and the service share the process).
+  ctx.inject(['agentMeshTaskService'], (taskCtx) => {
+    const service = (taskCtx as unknown as { agentMeshTaskService: { tools: { register(tool: unknown): unknown } } }).agentMeshTaskService
+    const steerFileFor = (row?: string): { file: string; row: string } => {
+      const name = row ?? statusName
+      return { file: join(dataDir, `steer-${name}.json`), row: name }
+    }
+    for (const tool of steeringTools(steerFileFor, () => [statusName])) service.tools.register(tool)
+  })
 
   let stopAnnounce: (() => void) | undefined
   if (config.announceName) {

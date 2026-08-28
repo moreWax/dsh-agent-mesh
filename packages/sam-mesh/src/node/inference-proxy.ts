@@ -11,6 +11,7 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { FailureLimiter } from '../core/failure-limiter.js'
+import { readFileSync, statSync } from 'node:fs'
 import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
 export type GateClass = 'open' | 'gated'
@@ -60,6 +61,28 @@ export interface GateToken {
   scopes?: string[]
 }
 
+/** Live steering defaults for served models (written by the inference_steer tool; read per request). */
+export interface Steering {
+  systemPrompt?: string
+  temperature?: number
+  topP?: number
+  maxTokens?: number
+}
+
+/** Merge steering into a chat-completions body: defaults only — the caller's explicit values always win. */
+export function applySteering(body: unknown, steering: Steering | undefined): unknown {
+  if (!steering || typeof body !== 'object' || body === null) return body
+  const request = { ...(body as Record<string, unknown>) }
+  if (steering.temperature !== undefined && request.temperature === undefined) request.temperature = steering.temperature
+  if (steering.topP !== undefined && request.top_p === undefined) request.top_p = steering.topP
+  if (steering.maxTokens !== undefined && request.max_tokens === undefined) request.max_tokens = steering.maxTokens
+  if (steering.systemPrompt && Array.isArray(request.messages)) {
+    const messages = request.messages as Array<{ role?: unknown }>
+    if (!messages.some(m => m.role === 'system')) request.messages = [{ role: 'system', content: steering.systemPrompt }, ...messages]
+  }
+  return request
+}
+
 export interface InferenceProxyOptions {
   host: string
   port: number
@@ -82,6 +105,9 @@ export interface InferenceProxyOptions {
   /** Denial throttling: past `denyPerWindow` denials per token per window the gate answers
    *  403 immediately and logs sparsely. A leaked/wrong token is a flood source. */
   denyPerWindow?: number
+  /** Live steering: a JSON file (the inference_steer tool writes it) merged as defaults
+   *  into every chat-completions body, read per request (mtime-cached). */
+  steerFile?: string
   onLog?: (line: string) => void
 }
 
@@ -104,6 +130,28 @@ export function filterModelList(body: unknown, allowlist: string[]): unknown {
   if (typeof body !== 'object' || body === null || !Array.isArray((body as { data?: unknown }).data)) return undefined
   const data = (body as { data: Array<{ id?: unknown }> }).data.filter(m => typeof m.id === 'string' && allowlist.includes(m.id))
   return { ...(body as Record<string, unknown>), data }
+}
+
+/** mtime-cached steering file reader: missing/corrupt = no steering (never breaks inference). */
+const steerCache = new Map<string, { mtimeMs: number; steering: Steering | undefined }>()
+export function readSteerFile(path: string): Steering | undefined {
+  try {
+    const { mtimeMs } = statSync(path)
+    const cached = steerCache.get(path)
+    if (cached && cached.mtimeMs === mtimeMs) return cached.steering
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Steering
+    const steering: Steering = {
+      ...(typeof parsed.systemPrompt === 'string' && parsed.systemPrompt ? { systemPrompt: parsed.systemPrompt } : {}),
+      ...(typeof parsed.temperature === 'number' ? { temperature: parsed.temperature } : {}),
+      ...(typeof parsed.topP === 'number' ? { topP: parsed.topP } : {}),
+      ...(typeof parsed.maxTokens === 'number' ? { maxTokens: parsed.maxTokens } : {}),
+    }
+    steerCache.set(path, { mtimeMs, steering })
+    return steering
+  } catch {
+    steerCache.set(path, { mtimeMs: 0, steering: undefined })
+    return undefined
+  }
 }
 
 /** sam's node sets X-Peer-Id when proxying inference — mesh peer attribution for the log. */
@@ -130,7 +178,8 @@ export function createInferenceProxyServer(options: InferenceProxyOptions): Serv
     // fleet without a custom-header feature. Identical timing-safe compare.
     const allowlist = allowlistOf(options)
     const filterListing = allowlist !== undefined && gate === 'open'
-    const enforceExecution = allowlist !== undefined && gate === 'gated' && (req.method ?? '').toUpperCase() === 'POST'
+    const steerExecution = options.steerFile !== undefined && gate === 'gated' && (req.method ?? '').toUpperCase() === 'POST' && url.pathname.replace(/\/$/, '') === '/v1/chat/completions'
+    const enforceExecution = (allowlist !== undefined || steerExecution) && gate === 'gated' && (req.method ?? '').toUpperCase() === 'POST'
     void (async (): Promise<void> => {
       // The dedicated header wins; `Authorization: Bearer <capability>` is the
       // same secret through the standard OpenAI credential slot, so any
@@ -174,8 +223,17 @@ export function createInferenceProxyServer(options: InferenceProxyOptions): Serv
         if (enforceExecution && body.length > 0) {
           let parsed: unknown
           try { parsed = JSON.parse(body.toString('utf8')) } catch { parsed = undefined }
+          // Live steering: operator-set defaults merged below the model gate —
+          // the allowlist still decides which MODELS pass, steering only shapes requests.
+          if (steerExecution && options.steerFile) {
+            const steering = readSteerFile(options.steerFile)
+            if (steering) {
+              parsed = applySteering(parsed, steering)
+              body = Buffer.from(JSON.stringify(parsed), 'utf8')
+            }
+          }
           const model = requestModel(parsed)
-          if (model !== undefined && !allowlist.includes(model)) {
+          if (allowlist !== undefined && model !== undefined && !allowlist.includes(model)) {
             res.writeHead(404, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ error: { message: 'model not available through this gate', type: 'model_not_available' } }))
             return

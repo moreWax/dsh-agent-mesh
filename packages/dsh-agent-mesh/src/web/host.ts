@@ -373,6 +373,27 @@ export class AgentMeshWebHost extends TypertRemoteService {
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
 
+  /** Live model steering status (capability; the fleet's operator answers). */
+  @Remote("inferenceSteerStatus") async inferenceSteerStatus(request: { row?: string; serviceName?: string; peerId?: string } = {}): Promise<{ ok: boolean; rows?: Record<string, { systemPrompt?: string; temperature?: number; topP?: number; maxTokens?: number }>; error?: string }> {
+    const provider = await this.fleetAdminProvider(request)
+    if (typeof provider === "string") return { ok: false, error: provider }
+    try {
+      const result = AgentMeshWebHost.toolPayload<{ rows?: Record<string, { systemPrompt?: string; temperature?: number; topP?: number; maxTokens?: number }> }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/inference_steer_status`, arguments: { _capability: provider.capability, ...(request.row ? { row: request.row } : {}) } }))
+      return { ok: true, rows: result.rows ?? {} }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  /** Apply live steering to a served model (operator; every field optional; clear resets). */
+  @Remote("inferenceSteerApply") async inferenceSteerApply(request: { row?: string; systemPrompt?: string; temperature?: number; topP?: number; maxTokens?: number; clear?: boolean; serviceName?: string; peerId?: string }, approval: ApprovedAction): Promise<ActionResult> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const provider = await this.fleetAdminProvider(request)
+    if (typeof provider === "string") return { ok: false, error: provider }
+    try {
+      const result = AgentMeshWebHost.toolPayload<{ steered?: string }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/inference_steer`, arguments: { _capability: provider.capability, ...(request.row ? { row: request.row } : {}), ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { topP: request.topP } : {}), ...(request.maxTokens !== undefined ? { maxTokens: request.maxTokens } : {}), ...(request.clear === true ? { clear: true } : {}) } }))
+      return { ok: true, message: `Steering live on ${result.steered ?? request.row ?? 'default row'} — takes effect on the next request` }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
   /** Generate a one-time invite code: possession is the approval (operator). */
   @Remote("fleetInviteCreate") async fleetInviteCreate(request: { ttlMs?: number; note?: string; serviceName?: string; peerId?: string }, approval: ApprovedAction): Promise<{ ok: boolean; code?: string; expiresAt?: number; error?: string }> {
     if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
