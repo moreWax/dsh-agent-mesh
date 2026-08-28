@@ -39,6 +39,7 @@ function ChatSection({ api }: { api: ChatApi }) {
   const [busy, setBusy] = useState(false)
   const cursorRef = useRef(0)
 
+  const [loadError, setLoadError] = useState("")
   useEffect(() => {
     let live = true
     const poll = async () => {
@@ -46,8 +47,13 @@ function ChatSection({ api }: { api: ChatApi }) {
         const next = await api.chatSnapshot(cursorRef.current)
         if (!live) return
         setSnapshot(next)
+        setLoadError("")
         if (next.fleet.available && next.fleet.cursor > 0) cursorRef.current = next.fleet.cursor
-      } catch { /* transient; the next tick retries */ }
+      } catch (error) {
+        // Never hang silently: the wire failure IS the diagnosis (row failed to
+        // boot, remote unbound, gateway error) — surface it.
+        if (live) setLoadError(error instanceof Error ? error.message : String(error))
+      }
     }
     void poll()
     // Slow fallback; the live path is the mesh-chat/updated host event
@@ -58,7 +64,9 @@ function ChatSection({ api }: { api: ChatApi }) {
     return () => { live = false; clearInterval(t); refreshHandle.subscribe = null }
   }, [api])
 
-  if (!snapshot) return <section style={box}><strong>Mesh chat</strong><small>loading…</small></section>
+  if (!snapshot) return <section style={box}><strong>Mesh chat</strong>{loadError
+    ? <p role="alert" style={{ margin: 0 }}>chat service unreachable: {loadError}</p>
+    : <small>loading…</small>}</section>
 
   const send = async (fn: () => Promise<ActionResult>) => {
     if (busy) return
