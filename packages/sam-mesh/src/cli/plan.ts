@@ -331,7 +331,11 @@ export function fleetProfilePatch(invite: FleetInvite): string {
     port: 0
     path: /mcp
     healthPath: /healthz
-    serviceName: ${invite.serviceName}
+    # A consumer's OWN task service must not claim the fleet's name — every
+    # paired member registering '${invite.serviceName}' makes fleet discovery
+    # a name collision (the chat channel proved it). Suffix with the local
+    # label so the fleet name stays unique to its operator.
+    serviceName: ${invite.serviceName}-member
     registerWithSam: true
     shutdownTimeoutMs: 5000
     dbPath: ~/.dsh/storages/agent-mesh-task-service/tasks.db

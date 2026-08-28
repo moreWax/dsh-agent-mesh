@@ -47,16 +47,18 @@ export class MeshChatWebHost extends TypertRemoteService {
 
   private get mesh(): AgentMeshFace { return (this.ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh }
 
-  /** Find the fleet server's peer: exact name first, then a suffix match —
-   *  fleets carry operator-chosen prefixes ('morewax-dsh-task-service' vs the
-   *  'dsh-task-service' default) and the default must just work. */
-  private async fleetPeer(serviceName?: string): Promise<{ peerId: string; service: string } | string> {
+  /** Fleet server candidates: exact name first, then suffix matches —
+   *  operator-chosen prefixes ('morewax-dsh-task-service' vs the default).
+   *  NOTE: paired members also register their OWN task service under the
+   *  fleet's name (a known collision — fleetProfilePatch pins the consumer
+   *  row to the fleet name), so callers must TRY candidates in order:
+   *  the real fleet server is the one whose chat tools actually answer. */
+  private async fleetCandidates(serviceName?: string): Promise<Array<{ peerId: string; service: string }>> {
     const name = serviceName ?? this.options.fleetServiceName ?? 'dsh-task-service'
     const all = await this.mesh.core.discoverRemoteServices({ type: 'mcp' }).catch(() => [])
-    const exact = all.find(s => s.srv_name === name && s.peer_id)
-    const fuzzy = exact ?? all.find(s => typeof s.srv_name === 'string' && s.srv_name.endsWith('task-service') && s.peer_id)
-    if (!fuzzy?.peer_id) return `no '${name}' fleet service visible in the swarm`
-    return { peerId: fuzzy.peer_id, service: fuzzy.srv_name }
+    const exact = all.filter(s => s.srv_name === name && s.peer_id)
+    const fuzzy = all.filter(s => typeof s.srv_name === 'string' && s.srv_name.endsWith('task-service') && s.peer_id && !exact.includes(s))
+    return [...exact, ...fuzzy].map(s => ({ peerId: s.peer_id!, service: s.srv_name }))
   }
 
   /** Snapshot both channels. afterId = last-seen fleet cursor (0 = tail-fetch the recent window). */
@@ -65,20 +67,28 @@ export class MeshChatWebHost extends TypertRemoteService {
   @Remote("chatSnapshot") async chatSnapshot(afterId: number): Promise<ChatSnapshot> {
     afterId = typeof afterId === "number" ? afterId : 0
     const fleet: ChatSnapshot['fleet'] = { available: false, cursor: afterId, messages: [] }
-    const provider = await this.fleetPeer()
-    if (typeof provider === 'string') fleet.error = provider
+    const candidates = await this.fleetCandidates()
+    if (candidates.length === 0) fleet.error = `no '${this.options.fleetServiceName ?? 'dsh-task-service'}' fleet service visible in the swarm`
     else {
       const capability = await this.mesh.resolveCallCapability?.()
-      const result = toolPayload<{ messages?: ChatMessageView[] }>(await this.mesh.core.callRemoteTool({
-        peer_id: provider.peerId,
-        tool_name: `mcp://${provider.service}/chat_fetch`,
-        arguments: { ...(afterId > 0 ? { afterId } : {}), limit: 50, ...(capability !== undefined ? { _capability: capability } : {}) },
-      }))
-      if (Array.isArray(result.messages)) {
-        fleet.available = true
-        fleet.messages = result.messages
-        fleet.cursor = result.messages.length > 0 ? result.messages[result.messages.length - 1]!.id : afterId
-      } else fleet.error = 'fleet channel unavailable (no member capability?)'
+      let lastError = ''
+      for (const provider of candidates) {
+        try {
+          const result = toolPayload<{ messages?: ChatMessageView[] }>(await this.mesh.core.callRemoteTool({
+            peer_id: provider.peerId,
+            tool_name: `mcp://${provider.service}/chat_fetch`,
+            arguments: { ...(afterId > 0 ? { afterId } : {}), limit: 50, ...(capability !== undefined ? { _capability: capability } : {}) },
+          }))
+          if (Array.isArray(result.messages)) {
+            fleet.available = true
+            fleet.messages = result.messages
+            fleet.cursor = result.messages.length > 0 ? result.messages[result.messages.length - 1]!.id : afterId
+            break
+          }
+          lastError = 'fleet channel unavailable (no member capability?)'
+        } catch (error) { lastError = error instanceof Error ? error.message : String(error) }
+      }
+      if (!fleet.available) fleet.error = lastError || 'fleet channel unavailable (no member capability?)'
     }
     const inbox = { serviceName: this.options.inboxServiceName ?? 'dsh-chat-inbox', messages: this.options.store.fetch('inbox', 0, 50).slice(-50) as ChatMessageView[] }
     return { fleet, inbox }
@@ -89,16 +99,22 @@ export class MeshChatWebHost extends TypertRemoteService {
     const trimmed = text.trim()
     if (!trimmed) return { ok: false, error: 'empty message' }
     if (trimmed.length > (this.options.maxMessageChars ?? 4000)) return { ok: false, error: 'message too large' }
-    const provider = await this.fleetPeer()
-    if (typeof provider === 'string') return { ok: false, error: provider }
+    const candidates = await this.fleetCandidates()
+    if (candidates.length === 0) return { ok: false, error: `no '${this.options.fleetServiceName ?? 'dsh-task-service'}' fleet service visible in the swarm` }
     const capability = await this.mesh.resolveCallCapability?.()
     if (capability === undefined) return { ok: false, error: 'no fleet capability on this machine — join the fleet first' }
-    await this.mesh.core.callRemoteTool({
-      peer_id: provider.peerId,
-      tool_name: `mcp://${provider.service}/chat_send`,
-      arguments: { text: trimmed, _capability: capability },
-    })
-    return { ok: true, message: 'sent' }
+    let lastError = ''
+    for (const provider of candidates) {
+      try {
+        await this.mesh.core.callRemoteTool({
+          peer_id: provider.peerId,
+          tool_name: `mcp://${provider.service}/chat_send`,
+          arguments: { text: trimmed, _capability: capability },
+        })
+        return { ok: true, message: 'sent' }
+      } catch (error) { lastError = error instanceof Error ? error.message : String(error) }
+    }
+    return { ok: false, error: lastError || 'send failed' }
   }
 
   /** DM a peer by peer id: call its announced inbox service. */
