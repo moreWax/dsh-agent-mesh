@@ -32,8 +32,8 @@ describe('fleet join from the card (host-owned session)', () => {
     const core = {
       discoverRemoteServices: async () => [{ srv_name: 'fleet-tasks', peer_id: 'peer-aaa' }],
       callRemoteTool: async (input: { tool_name: string; arguments: Record<string, unknown> }) => {
-        if (input.tool_name.endsWith('/fleet_pair_request')) { requested = input.arguments; return { accepted: true } }
-        if (input.tool_name.endsWith('/fleet_pair_poll')) return { state: 'approved', sealed }
+        if (input.tool_name.endsWith('/fleet_pair_request')) { requested = input.arguments; return { structuredContent: { accepted: true } } }
+        if (input.tool_name.endsWith('/fleet_pair_poll')) return { structuredContent: { state: 'approved', sealed } }
         throw new Error('unexpected tool')
       },
     }
@@ -41,9 +41,11 @@ describe('fleet join from the card (host-owned session)', () => {
     // approve lazily: first poll captures the public key, second returns sealed
     let capturedKey: string | undefined
     core.callRemoteTool = async (input: { tool_name: string; arguments: Record<string, unknown> }) => {
-      if (input.tool_name.endsWith('/fleet_pair_request')) { requested = input.arguments; capturedKey = input.arguments.publicKey as string; return { accepted: true } }
+      if (input.tool_name.endsWith('/fleet_pair_request')) { requested = input.arguments; capturedKey = input.arguments.publicKey as string; return { structuredContent: { accepted: true } } }
       if (input.tool_name.endsWith('/fleet_pair_poll')) {
-        return capturedKey ? { state: 'approved', sealed: seal(INVITE, capturedKey) } : { state: 'pending' }
+        // REALITY: callRemoteTool resolves the MCP envelope, not the payload —
+        // reading .state off the envelope silently eats the approval.
+        return { structuredContent: capturedKey ? { state: 'approved', sealed: seal(INVITE, capturedKey) } : { state: 'pending' } }
       }
       throw new Error('unexpected tool')
     }
