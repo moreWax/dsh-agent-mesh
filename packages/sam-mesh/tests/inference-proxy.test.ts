@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { AddressInfo } from 'node:net'
+import { FailureLimiter } from '../src/core/failure-limiter.js'
 import { capabilityMatches, classifyGate, createInferenceProxyServer, filterModelList, requestModel, detectInferenceBackends, probeBackend, resolveAutoTarget, startAnnounceLoop, WELL_KNOWN_BACKENDS } from '../src/node/inference-proxy.js'
 
 describe('classifyGate', () => {
@@ -140,6 +141,36 @@ describe('inference proxy (http)', () => {
     expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'cap' }, body: '{"model":"tiny"}' })).status).toBe(200)
     proxy.close(); upstream.close()
   })
+describe('FailureLimiter (denial flood control)', () => {
+  it('throttles past the window and logs sparsely', () => {
+    const limiter = new FailureLimiter({ perWindow: 2, logEvery: 2 })
+    expect(limiter.deny('k', 1000)).toEqual({ throttled: false, log: true })
+    expect(limiter.deny('k', 2000)).toEqual({ throttled: false, log: true })
+    expect(limiter.deny('k', 3000)).toEqual({ throttled: true, log: true })   // 1st throttled
+    expect(limiter.deny('k', 4000)).toEqual({ throttled: true, log: false })  // suppressed
+    expect(limiter.deny('k', 70_000)).toEqual({ throttled: false, log: true }) // window slid
+  })
+  it('keys a credential by digest — never the secret', () => {
+    expect(FailureLimiter.keyOf(undefined)).toBe('no-credential')
+    const key = FailureLimiter.keyOf('some-secret')
+    expect(key).toHaveLength(16)
+    expect(key).not.toContain('secret')
+  })
+  it('the gate throttles a flooding wrong token', async () => {
+    const upstream = createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') })
+    const logs: string[] = []
+    const proxy = createInferenceProxyServer({ host: '127.0.0.1', port: 0, target: await listen(upstream), requiredCapability: 'right', denyPerWindow: 3, onLog: line => logs.push(line) })
+    const proxyUrl = await listen(proxy)
+    for (let i = 0; i < 8; i++) {
+      expect((await fetch(`${proxyUrl}/v1/chat/completions`, { method: 'POST', headers: { 'x-fleet-capability': 'wrong' }, body: '{}' })).status).toBe(403)
+    }
+    const denies = logs.filter(l => l.includes('DENY'))
+    expect(denies.length).toBeLessThan(8)
+    expect(denies.some(l => l.includes('throttled'))).toBe(true)
+    proxy.close(); upstream.close()
+  })
+})
+
 describe('startAnnounceLoop', () => {
 
   it('registers as SERVICE_TYPE_INFERENCE and re-announces until stopped', async () => {

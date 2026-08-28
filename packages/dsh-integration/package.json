@@ -1,0 +1,19 @@
+{
+  "name": "@morewax/dsh-integration",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cross-package integration harness \u2014 the ONLY place dsh-agent-mesh and dsh-mesh-chat meet (test-time; the runtime trust boundary stands).",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@morewax/sam-mesh": "workspace:*",
+    "@morewax/dsh-agent-mesh": "workspace:*",
+    "@morewax/dsh-mesh-chat": "workspace:*",
+    "vitest": "*",
+    "typescript": "*",
+    "@types/node": "*"
+  }
+}

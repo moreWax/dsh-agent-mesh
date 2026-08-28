@@ -10,6 +10,7 @@
  * Binds loopback only — the only inbound path is the mesh itself.
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
+import { FailureLimiter } from '../core/failure-limiter.js'
 import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
 export type GateClass = 'open' | 'gated'
@@ -78,6 +79,9 @@ export interface InferenceProxyOptions {
   /** Cap on the request body the gate will buffer (allowlist filtering needs the whole
    *  body). A capability holder OOMing the gate is still an attacker; exceeded = 413. */
   maxBodyBytes?: number
+  /** Denial throttling: past `denyPerWindow` denials per token per window the gate answers
+   *  403 immediately and logs sparsely. A leaked/wrong token is a flood source. */
+  denyPerWindow?: number
   onLog?: (line: string) => void
 }
 
@@ -115,6 +119,7 @@ function safeJson(body: Buffer): unknown {
 export function createInferenceProxyServer(options: InferenceProxyOptions): Server {
   const target = new URL(options.target)
   const log = options.onLog ?? (() => {})
+  const denyLimiter = new FailureLimiter({ perWindow: options.denyPerWindow ?? 20 })
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://loopback')
     const gate = classifyGate(req.method ?? 'GET', url.pathname)
@@ -139,7 +144,11 @@ export function createInferenceProxyServer(options: InferenceProxyOptions): Serv
       const identity = tokens.length > 0 ? identifyToken(presented, tokens) : undefined
       const legacyOk = capabilityMatches(presented, required)
       if (gate === 'gated' && !(legacyOk || tokenMayExecute(identity))) {
-        log(`DENY ${req.method} ${url.pathname} ${identity ? `member=${identity.member} (scope)` : 'no valid capability'}${peerOf(req)}`)
+        // Flood control: a wrong/leaked token can be denied forever but must
+        // not be floodable forever. Past the window limit the gate answers
+        // immediately (this path is already upstream-free) and logs sparsely.
+        const verdict = denyLimiter.deny(FailureLimiter.keyOf(presented))
+        if (verdict.log) log(`DENY ${req.method} ${url.pathname} ${identity ? `member=${identity.member} (scope)` : 'no valid capability'}${peerOf(req)}${verdict.throttled ? ' (throttled — further denials suppressed)' : ''}`)
         res.writeHead(403, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: { message: 'fleet capability required', type: 'capability_required' } }))
         return

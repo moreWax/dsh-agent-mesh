@@ -109,6 +109,27 @@ importers:
         specifier: ^2.8.0
         version: 2.9.0
 
+  packages/dsh-integration:
+    devDependencies:
+      '@morewax/dsh-agent-mesh':
+        specifier: workspace:*
+        version: link:../dsh-agent-mesh
+      '@morewax/dsh-mesh-chat':
+        specifier: workspace:*
+        version: link:../dsh-mesh-chat
+      '@morewax/sam-mesh':
+        specifier: workspace:*
+        version: link:../sam-mesh
+      '@types/node':
+        specifier: '*'
+        version: 24.13.3
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+      vitest:
+        specifier: '*'
+        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)
+
   packages/dsh-mesh-chat:
     dependencies:
       '@deepseek-ai/dsh-typert-protocol':

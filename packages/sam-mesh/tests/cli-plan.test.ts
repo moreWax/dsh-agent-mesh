@@ -252,3 +252,31 @@ describe('mergeProfilePatch — default template marker', () => {
     expect('conflict' in merged).toBe(true)
   })
 })
+
+
+describe('doctor chat checks', () => {
+  const base = { installed: true, enrolled: true, running: true }
+  it('inbox check ok when visible, warns with fix when none', () => {
+    const ok = buildChecks({ ...base, chat: { inboxVisible: 2, channel: 'ok' } })
+    const inbox = ok.find(c => c.name === 'chat inbox announced')!
+    expect(inbox.ok).toBe(true)
+    const none = buildChecks({ ...base, chat: { inboxVisible: 0, channel: 'ok' } })
+    const inboxBad = none.find(c => c.name === 'chat inbox announced')!
+    expect(inboxBad.ok).toBe(false)
+    expect(inboxBad.fix).toContain('dsh-mesh-chat')
+  })
+  it('channel states: ok / unpaired / unavailable', () => {
+    for (const [state, ok] of [['ok', true], ['unpaired', false], ['unavailable', false]] as const) {
+      const checks = buildChecks({ ...base, chat: { inboxVisible: 1, channel: state } })
+      const channel = checks.find(c => c.name === 'fleet channel')!
+      expect(channel.ok).toBe(ok)
+    }
+    // unpaired explains WHY, not just that it failed
+    const checks = buildChecks({ ...base, chat: { inboxVisible: 1, channel: 'unpaired' } })
+    expect(checks.find(c => c.name === 'fleet channel')!.detail).toContain('join the fleet')
+  })
+  it('chat checks absent when chat is not installed (null)', () => {
+    const checks = buildChecks({ ...base, chat: null })
+    expect(checks.find(c => c.name === 'chat inbox announced')).toBeUndefined()
+  })
+})

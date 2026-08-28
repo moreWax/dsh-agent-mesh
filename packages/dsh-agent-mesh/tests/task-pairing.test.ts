@@ -66,9 +66,9 @@ describe('pairing over HTTP with the capability gate on', () => {
       const req = await call('fleet_pair_request', { requestId: 'rj-0123456789abcdef', publicKey: publicKeyX, label: 'new-laptop' })
       expect(req.error).toBeUndefined()
       // …but cannot LIST (that would reveal pending requests)…
-      expect((await call('fleet_pair_list', {})).error?.message).toBe('capability required')
+      expect((await call('fleet_pair_list', {})).error?.message).toContain('fleet capability required')
       // …and cannot APPROVE (that would seal the invite to their key).
-      expect((await call('fleet_pair_approve', { requestId: 'rj-0123456789abcdef' })).error?.message).toBe('capability required')
+      expect((await call('fleet_pair_approve', { requestId: 'rj-0123456789abcdef' })).error?.message).toContain('fleet capability required')
       // operator path: with the capability, list + approve work
       const list = await call('fleet_pair_list', { _capability: 'fleet-secret' })
       expect((list.result?.structuredContent as { pending: unknown[] }).pending).toHaveLength(1)

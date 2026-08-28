@@ -15,6 +15,26 @@ import { TaskHttpServer } from './http.js'
 import { CapabilityAuthorizer } from './authz.js'
 import { SamTaskRegistrationClient } from './registration.js'
 import type { SamServiceRegistrationClient as Client } from '@morewax/sam-mesh'
+/** 2s debounce coalescer: identical keys flush once with their repeat count. */
+class AuditCoalescer {
+  private readonly pending = new Map<string, { count: number; flush: (count: number) => void; timer: ReturnType<typeof setTimeout> }>()
+  add(key: string, flush: (count: number) => void, windowMs = 2000): void {
+    const existing = this.pending.get(key)
+    if (existing) {
+      clearTimeout(existing.timer)
+      existing.count += 1
+      existing.flush = flush
+      existing.timer = setTimeout(() => { this.pending.delete(key); existing.flush(existing.count) }, windowMs)
+      existing.timer.unref?.()
+      return
+    }
+    const entry = { count: 1, flush, timer: setTimeout(() => { this.pending.delete(key); flush(1) }, windowMs) }
+    entry.timer.unref?.()
+    this.pending.set(key, entry)
+  }
+}
+const auditCoalescer = new AuditCoalescer()
+
 export const name='agent-mesh-task-service'
 export const inject=['agentMesh','credentials']
 export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean; memberCredentials?: boolean; membersPath?: string; memberScopes?: FleetScope[]; legacySharedCapability?: boolean; toolAllowlist?: string[]; inviteOnly?: boolean }
@@ -102,9 +122,17 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
       console.info(`[agent-mesh-task-service] [fleet-audit] ${event.tool} ${event.allowed ? 'allowed' : 'DENIED'}${event.member ? ` member=${event.member}` : ''}`)
       // Optional chat bridge: the dsh-mesh-chat plugin (if installed) turns
       // fleet audit events into system messages in the fleet channel.
-      // Structural — this plugin never imports the chat package.
+      // Structural — this plugin never imports the chat package. Identical
+      // events coalesce over a 2s window ('…×47 in 2s'): a busy gate must
+      // not drown the conversation.
       const chat = (ctx as Context & { get?(name: string): unknown }).get?.('agentMeshChat') as { postSystem?(text: string, meta?: unknown): void } | undefined
-      chat?.postSystem?.(`${event.tool} ${event.allowed ? 'allowed' : 'DENIED'}${event.member ? ` — ${event.member}` : ''}`, { tool: event.tool, allowed: event.allowed, ...(event.member ? { member: event.member } : {}) })
+      if (chat?.postSystem) {
+        const key = `${event.tool}|${event.allowed}|${event.member ?? ''}`
+        auditCoalescer.add(key, (count) => {
+          const base = `${event.tool} ${event.allowed ? 'allowed' : 'DENIED'}${event.member ? ` — ${event.member}` : ''}`
+          chat.postSystem!(count > 1 ? `${base} (×${count} in 2s)` : base, { tool: event.tool, allowed: event.allowed, ...(event.member ? { member: event.member } : {}), ...(count > 1 ? { count } : {}) })
+        })
+      }
     },
   }); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<Client['register']>>|undefined

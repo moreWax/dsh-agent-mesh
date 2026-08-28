@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { TaskProtocolError, type JsonObject } from './types.js'
 import { TaskService } from './service.js'
 import { CapabilityAuthorizer, extractCredentials, runAuthorizers, type Authorizer } from './authz.js'
+import { FailureLimiter } from '@morewax/sam-mesh'
 
 export interface TaskHttpServerOptions { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; shutdownTimeoutMs?: number
   /**
@@ -25,6 +26,7 @@ function send(res: ServerResponse, status: number, body?: unknown, headers: Reco
 async function body(req: IncomingMessage): Promise<unknown> { const chunks: Buffer[]=[]; let n=0; for await (const raw of req) { const c=Buffer.from(raw); n+=c.length; if(n>1024*1024) throw new Error('request body too large'); chunks.push(c) } return JSON.parse(Buffer.concat(chunks).toString('utf8')) }
 function rpc(id: unknown, result: unknown) { return { jsonrpc: '2.0', id: id ?? null, result } }
 export class TaskHttpServer {
+  private readonly denyLimiter = new FailureLimiter()
   private server: Server | undefined; private stopping: Promise<void> | undefined; private readonly path: string; private readonly healthPath: string
   constructor(readonly tasks: TaskService, readonly options: TaskHttpServerOptions = {}) { this.path=options.path ?? '/mcp'; this.healthPath=options.healthPath ?? '/healthz' }
   async start(): Promise<TaskHttpAddress> { if(this.server) return this.address(); const server=createServer((req,res)=>void this.handle(req,res)); this.server=server; await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(this.options.port ?? 0,this.options.host ?? '127.0.0.1',()=>{server.off('error',reject);resolve()})}); return this.address() }
@@ -47,10 +49,14 @@ export class TaskHttpServer {
         const { args, ctx: authCtx } = extractCredentials({ ...((msg.params?.arguments ?? {}) as JsonObject) })
         const authorizers = this.options.authorizers ?? (this.options.capability !== undefined ? [new CapabilityAuthorizer(this.options.capability)] : [])
         const verdict = await runAuthorizers(authorizers, tool, args, authCtx)
-        this.options.onAudit?.({ tool: name, allowed: verdict.allow, ...(verdict.allow && verdict.member ? { member: verdict.member } : {}) })
         if (!verdict.allow) {
+          // Flood control: throttle repeated denials per credential — the
+          // audit log is the signal, a flood is not.
+          const flood = this.denyLimiter.deny(FailureLimiter.keyOf(authCtx.capability))
+          if (flood.log) this.options.onAudit?.({ tool: name, allowed: false })
           return send(res,200,{jsonrpc:'2.0',id:msg.id??null,error:{code:-32602,message:verdict.message}})
         }
+        this.options.onAudit?.({ tool: name, allowed: true, ...(verdict.allow && verdict.member ? { member: verdict.member } : {}) })
         const value=await tool.handler(args,{signal:abort.signal,...(verdict.allow&&verdict.member?{member:verdict.member}:{})}); result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}
       }
       else return send(res,200,{jsonrpc:'2.0',id:msg.id??null,error:{code:-32601,message:'Method not found'}})

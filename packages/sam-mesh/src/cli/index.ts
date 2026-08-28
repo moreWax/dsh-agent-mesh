@@ -386,9 +386,43 @@ else if (command === 'doctor') {
     modelStore = { count: models.length, bytes: models.reduce((a, m) => a + m.bytes, 0) }
     serveRows = (await readServeStatuses(dataDir)).map(s => ({ name: s.name, state: s.state, detail: s.detail }))
   } catch { runtimeTag = undefined }
+  // Chat posture (when dsh-mesh-chat is present): inboxes visible through
+  // discovery, and the fleet channel probed with the stored capability.
+  let chat: { inboxVisible?: number | undefined; channel?: 'ok' | 'unavailable' | 'unpaired' | undefined } | null = null
+  try {
+    if (sam === undefined) throw new Error('daemon down')
+    const remoteInboxes = await sam.discoverRemoteServices({ type: 'mcp', name: 'dsh-chat-inbox' }).catch(() => [])
+    // Own services are not self-listed — the local registry answers that half.
+    const localServices = await sam.listLocalServices().catch(() => [] as Array<{ name?: string }>)
+    const localInbox = localServices.some(s => (s as { name?: string }).name === 'dsh-chat-inbox') ? 1 : 0
+    chat = { inboxVisible: remoteInboxes.length + localInbox }
+    const capPath = `${process.env.HOME}/.config/sam-mesh/fleet-capability`
+    const capability = existsSync(capPath) ? (await readFile(capPath, 'utf8')).trim() : ''
+    // Probe EVERY visible task service with the stored capability — it works
+    // for the fleet(s) we belong to and fails for the rest (their operators).
+    const fleets = await sam.discoverRemoteServices({ type: 'mcp', name: 'dsh-task-service' }).catch(() => [])
+    const hostsLocal = localServices.some(s => (s as { name?: string }).name?.includes('task-service'))
+    if (fleets.length > 0 || hostsLocal) {
+      const verdicts: string[] = []
+      for (const fleet of fleets) {
+        if (!fleet.peer_id) continue
+        try {
+          await sam.callRemoteTool({ peer_id: fleet.peer_id, tool_name: `mcp://${fleet.srv_name ?? 'dsh-task-service'}/chat_fetch`, arguments: { limit: 1, _capability: capability } })
+          verdicts.push('ok')
+        } catch (error) {
+          verdicts.push(/capability/i.test(error instanceof Error ? error.message : String(error)) ? 'denied' : 'error')
+        }
+      }
+      if (verdicts.includes('ok')) chat.channel = 'ok'
+      else if (hostsLocal && capability) chat.channel = 'ok' // we host the fleet and hold its credential — the channel is ours
+      else if (hostsLocal) chat.channel = 'unpaired'
+      else if (verdicts.includes('error')) chat.channel = 'unavailable'
+      else chat.channel = 'unpaired'
+    }
+  } catch { chat = null }
   const checks = buildChecks({
     installed: status.installed, enrolled: status.enrolled, running: status.running,
-    peerCount, serviceCount, localServiceCount, runtimeTag, modelStore, serveRows,
+    peerCount, serviceCount, localServiceCount, runtimeTag, modelStore, serveRows, chat,
   })
   if (status.enrolled && status.enrolledHub) {
     const enrolledCheck = checks.find(ch => ch.name === 'enrolled on a hub')

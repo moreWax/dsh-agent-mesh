@@ -79,6 +79,8 @@ export interface DoctorInputs {
   modelStore?: { count: number; bytes: number } | undefined
   /** Serve-row states from the status files (empty when none). */
   serveRows?: Array<{ name: string; state: string; detail?: string | undefined; mode?: 'runtime' | 'external' | undefined }> | undefined
+  /** Chat posture: inbox announcements visible, fleet channel reachability. null = chat not installed. */
+  chat?: { inboxVisible?: number | undefined; channel?: 'ok' | 'unavailable' | 'unpaired' | undefined } | null | undefined
 }
 
 /** Each failed check carries the exact next command — doctor is advice, not just status. */
@@ -122,6 +124,13 @@ export function buildChecks(input: DoctorInputs): DoctorCheck[] {
   }
   for (const row of input.serveRows ?? []) {
     checks.push({ name: `serve row '${row.name}'`, ok: row.state === 'serving', detail: row.detail, fix: row.state === 'error' ? `fix the serve row config (Agent Mesh card → Share models) — last error: ${row.detail ?? 'unknown'}` : row.state === 'starting' ? 'model still loading — check again shortly' : undefined })
+  }
+  if (input.chat != null) {
+    const visible = input.chat.inboxVisible ?? 0
+    checks.push({ name: 'chat inbox announced', ok: visible > 0, detail: visible > 0 ? `${visible} inbox(es) visible` : 'no dsh-chat-inbox visible in the swarm (own services are not self-listed)', fix: visible === 0 ? 'on the peer you expect to DM: install @morewax/dsh-mesh-chat and restart dsh' : undefined })
+    if (input.chat.channel !== undefined) {
+      checks.push({ name: 'fleet channel', ok: input.chat.channel === 'ok', detail: input.chat.channel === 'ok' ? 'member can send/fetch' : input.chat.channel === 'unpaired' ? 'no fleet capability — join the fleet for the channel' : 'channel unreachable or capability invalid', fix: input.chat.channel === 'ok' ? undefined : 'Agent Mesh card → Join a fleet (or check the stored capability)' })
+    }
   }
   return checks
 }

@@ -44,7 +44,7 @@ export class CapabilityAuthorizer implements Authorizer {
     const presented = ctx.capability ?? ''
     const a = Buffer.from(presented); const b = Buffer.from(this.secret)
     if (a.length === b.length && a.length > 0 && timingSafeEqual(a, b)) return ALLOW
-    return { allow: false, message: 'capability required' }
+    return { allow: false, message: 'fleet capability required — join the fleet (Agent Mesh card → Join a fleet)' }
   }
 }
 
@@ -67,11 +67,11 @@ export class MemberAuthorizer implements Authorizer {
     for (const member of members) {
       const a = Buffer.from(presented); const b = Buffer.from(member.capability)
       if (a.length === b.length && a.length > 0 && timingSafeEqual(a, b)) {
-        if (tool.auth === 'operator') return { allow: false, message: 'operator capability required' }
+        if (tool.auth === 'operator') return { allow: false, message: 'operator capability required — only the fleet operator can do this' }
         // Scope enforcement: 'capability' tools default to the owning scope;
         // a tool may declare a stricter one (requiredScopes).
         const required = tool.requiredScopes ?? ['tasks']
-        if (!required.some(scope => member.scopes.includes(scope))) return { allow: false, message: 'capability required' }
+        if (!required.some(scope => member.scopes.includes(scope))) return { allow: false, message: 'fleet capability required — join the fleet (Agent Mesh card → Join a fleet)' }
         return { allow: true, member: member.name }
       }
     }
@@ -79,7 +79,7 @@ export class MemberAuthorizer implements Authorizer {
       const a = Buffer.from(presented); const b = Buffer.from(this.operatorSecret)
       if (a.length === b.length && a.length > 0 && timingSafeEqual(a, b)) return { allow: true, member: 'operator' }
     }
-    return { allow: false, message: 'capability required' }
+    return { allow: false, message: 'fleet capability required — join the fleet (Agent Mesh card → Join a fleet)' }
   }
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SamLlmAdapter } from '../src/llm/index.js'
+import { SamHttpError } from '@morewax/sam-mesh'
 import type { ChatCompletionChunk } from '../src/inference/index.js'
 
 async function collect(source: AsyncIterable<unknown>) { const out=[]; for await (const value of source) out.push(value); return out }
@@ -58,6 +59,16 @@ describe('fleet capability injection', () => {
   })
 })
 
+
+
+
+describe('failure mapping', () => {
+  it('a gate 403 (capability denial) maps to PROVIDER with join-the-fleet guidance — never AUTH (dsh masks AUTH as "API key is invalid")', async () => {
+    const api = { chat: vi.fn(async () => { throw new SamHttpError('forbidden', 403, 'Forbidden', { error: { message: 'fleet capability required', type: 'capability_required' } }) }), models: vi.fn() }
+    const adapter = new SamLlmAdapter(api as any, () => ({}))
+    await expect(collect(adapter.stream({ provider: 'sam-mesh', model: 'm', messages: [] }))).rejects.toMatchObject({ code: 'PROVIDER', message: expect.stringContaining('Join the fleet') })
+  })
+})
 
 describe('apply capability wiring', () => {
   function mockCtx(capability?: string) {

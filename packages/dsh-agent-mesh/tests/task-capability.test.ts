@@ -23,8 +23,8 @@ describe('task service capability gate (public-hub posture)', () => {
     try {
       const missing = await call(address.mcpUrl, {})
       const wrong = await call(address.mcpUrl, { _capability: 'nope' })
-      expect(missing.error?.message).toBe('capability required')
-      expect(wrong.error?.message).toBe('capability required') // no oracle: identical to missing
+      expect(missing.error?.message).toBe(wrong.error?.message)
+      expect(wrong.error?.message).toContain('fleet capability required') // no oracle: identical to missing
       const right = await call(address.mcpUrl, { _capability: 'fleet-secret-123' })
       expect(right.error).toBeUndefined()
       expect(right.result?.structuredContent?.task?.taskId).toBeTruthy()

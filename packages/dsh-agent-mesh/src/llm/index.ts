@@ -82,7 +82,14 @@ function failure(error: unknown): LlmError {
   let value: unknown = error
   for (let depth = 0; depth < 5 && value instanceof Error; depth++, value = value.cause) {
     if (value instanceof SamHttpError) {
-      if (value.status === 403) return new LlmError(value.message + ' — mesh execution is capability-gated: join the fleet (Agent Mesh card → Discover fleets) or check the fleet capability in the managed store', 'AUTH', { cause: value })
+      // Capability denial is NOT an auth failure: dsh masks every AUTH-class
+      // error as "API key is invalid" (its own correct credential doctrine) —
+      // which hides our gate. Policy denials ride PROVIDER so the real
+      // guidance reaches the user verbatim.
+      const body = value.body as { error?: { type?: unknown } } | undefined
+      if (value.status === 403 || body?.error?.type === 'capability_required') {
+        return new LlmError('Fleet capability required — mesh execution is capability-gated. Join the fleet (Agent Mesh card → Discover fleets), or check the stored capability.', 'PROVIDER', { status: value.status, cause: value })
+      }
       const code = value.status === 401 ? 'AUTH'
         : value.status === 429 ? 'RATE_LIMIT' : value.status >= 500 ? 'SERVER' : 'PROVIDER'
       return new LlmError(value.message, code, { status: value.status, cause: error })

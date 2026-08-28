@@ -13,7 +13,10 @@
       "types": "./lib/remote.d.ts",
       "default": "./lib/remote.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./store": "./lib/store.js",
+    "./inbox": "./lib/inbox.js",
+    "./fleet-channel": "./lib/fleet-channel.js"
   },
   "dsh": {
     "bundle": {

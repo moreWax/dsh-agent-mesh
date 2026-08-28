@@ -1,0 +1,53 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    "lib": [
+      "es2024"
+    ],
+    "types": [
+      "node"
+    ],
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@morewax/sam-mesh": [
+        "../sam-mesh/src/core/index.ts"
+      ],
+      "@morewax/sam-mesh/node": [
+        "../sam-mesh/src/node/index.ts"
+      ],
+      "@morewax/sam-mesh/plan": [
+        "../sam-mesh/src/cli/plan.ts"
+      ],
+      "@morewax/dsh-agent-mesh": [
+        "../dsh-agent-mesh/src/index.ts"
+      ],
+      "@morewax/dsh-agent-mesh/tasks": [
+        "../dsh-agent-mesh/src/tasks/index.ts"
+      ],
+      "@morewax/dsh-mesh-chat": [
+        "../dsh-mesh-chat/src/index.ts"
+      ],
+      "@morewax/dsh-mesh-chat/store": [
+        "../dsh-mesh-chat/src/store.ts"
+      ],
+      "@morewax/dsh-mesh-chat/inbox": [
+        "../dsh-mesh-chat/src/inbox.ts"
+      ],
+      "@morewax/dsh-mesh-chat/fleet-channel": [
+        "../dsh-mesh-chat/src/fleet-channel.ts"
+      ]
+    }
+  },
+  "include": [
+    "tests"
+  ]
+}
