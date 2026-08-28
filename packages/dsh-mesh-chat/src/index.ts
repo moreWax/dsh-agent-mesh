@@ -82,6 +82,12 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   // The publisher fans every appended message out to members over GossipSub.
   const fleetName = config.fleetChannel?.serviceName ?? 'dsh-task-service'
   const meshCore = (ctx as unknown as { agentMesh: { core: { callTool<T>(name: string, args: Record<string, unknown>): Promise<T>; requestRaw(path: string, options: { method: string; body?: unknown }): Promise<{ status: number; body: AsyncIterable<Uint8Array> }> } } }).agentMesh.core
+  // Resolve against discovery: operator-chosen prefixes mean the configured
+  // name may only be a SUFFIX of the swarm name.
+  const discovered = await meshCore.callTool<Array<{ srv_name?: string }>>('discover_remote_services', { type: 'mcp' }).catch(() => [])
+  const resolvedFleet = discovered.some(s => s.srv_name === fleetName)
+    ? fleetName
+    : discovered.find(s => typeof s.srv_name === 'string' && s.srv_name.endsWith('task-service'))?.srv_name ?? fleetName
   const emitUpdated = (): void => {
     // Push, not poll: the card subscribes to this host event (same pattern as
     // llm/adapters-updated) and refetches on arrival.
@@ -91,7 +97,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const publisher = config.notifications === false
     ? undefined
     : new FleetPublisher(meshCore, {
-      serviceName: fleetName,
+      serviceName: resolvedFleet,
       membersPath: (config.membersPath ?? `${homedir()}/.config/sam-mesh/fleet-members.json`).replace(/^~(?=\/)/, homedir()),
       operatorCapability: operatorCap,
       log: line => console.info(`[mesh-chat] ${line}`),
@@ -125,7 +131,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       const capability = await resolveCapability?.().catch(() => undefined)
       if (!capability) return // consumer without a fleet: nothing to open
       subscriber = new FleetSubscriber(meshCore, {
-        serviceName: fleetName,
+        serviceName: resolvedFleet,
         capability,
         log: line => console.info(`[mesh-chat] ${line}`),
         onMessage: message => { emitUpdated(); void message },

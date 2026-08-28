@@ -47,13 +47,16 @@ export class MeshChatWebHost extends TypertRemoteService {
 
   private get mesh(): AgentMeshFace { return (this.ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh }
 
-  /** Find the fleet server's peer for a service name. */
+  /** Find the fleet server's peer: exact name first, then a suffix match —
+   *  fleets carry operator-chosen prefixes ('morewax-dsh-task-service' vs the
+   *  'dsh-task-service' default) and the default must just work. */
   private async fleetPeer(serviceName?: string): Promise<{ peerId: string; service: string } | string> {
     const name = serviceName ?? this.options.fleetServiceName ?? 'dsh-task-service'
-    const services = await this.mesh.core.discoverRemoteServices({ type: 'mcp', name }).catch(() => [])
-    const hit = services.find(s => s.srv_name === name && s.peer_id)
-    if (!hit?.peer_id) return `no '${name}' fleet service visible in the swarm`
-    return { peerId: hit.peer_id, service: name }
+    const all = await this.mesh.core.discoverRemoteServices({ type: 'mcp' }).catch(() => [])
+    const exact = all.find(s => s.srv_name === name && s.peer_id)
+    const fuzzy = exact ?? all.find(s => typeof s.srv_name === 'string' && s.srv_name.endsWith('task-service') && s.peer_id)
+    if (!fuzzy?.peer_id) return `no '${name}' fleet service visible in the swarm`
+    return { peerId: fuzzy.peer_id, service: fuzzy.srv_name }
   }
 
   /** Snapshot both channels. afterId = last-seen fleet cursor (0 = tail-fetch the recent window). */
