@@ -16,9 +16,9 @@ import { CapabilityAuthorizer } from './authz.js'
 import { SamTaskRegistrationClient } from './registration.js'
 export const name='agent-mesh-task-service'
 export const inject=['agentMesh','credentials']
-export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean; memberCredentials?: boolean; membersPath?: string; memberScopes?: FleetScope[]; legacySharedCapability?: boolean; toolAllowlist?: string[] }
+export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean; memberCredentials?: boolean; membersPath?: string; memberScopes?: FleetScope[]; legacySharedCapability?: boolean; toolAllowlist?: string[]; inviteOnly?: boolean }
 export const DEFAULT_TASK_DB = '~/.dsh/storages/agent-mesh-task-service/tasks.db'
-export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default(''),pairing:z.boolean().default(true),pairControlPlane:z.string().default('https://hub.sam-mesh.dev'),pairAnnouncePrivate:z.boolean().default(false),memberCredentials:z.boolean().default(true),membersPath:z.string().default(defaultMembersPath()),memberScopes:z.array(z.union(['tasks','inference','admin'])).default(['tasks','inference']),legacySharedCapability:z.boolean().default(true),toolAllowlist:z.array(z.string()).default([])}) as unknown as z<Config>
+export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default(''),pairing:z.boolean().default(true),pairControlPlane:z.string().default('https://hub.sam-mesh.dev'),pairAnnouncePrivate:z.boolean().default(false),memberCredentials:z.boolean().default(true),membersPath:z.string().default(defaultMembersPath()),memberScopes:z.array(z.union(['tasks','inference','admin'])).default(['tasks','inference']),legacySharedCapability:z.boolean().default(true),toolAllowlist:z.array(z.string()).default([]),inviteOnly:z.boolean().default(false)}) as unknown as z<Config>
 declare module '@deepseek-ai/cordis' { interface Context { agentMeshTaskService: TaskService } }
 export const provide=['agentMeshTaskService']
 function resolveDbPath(value: string): string {
@@ -65,6 +65,7 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
       // One-time invite codes: possession is the approval — a joiner with a
       // live code skips the operator round-trip entirely.
       invites: new InviteCodes(),
+      ...(config.inviteOnly ? { inviteOnly: true } : {}),
       // The invite seals a MEMBER capability — the shared secret never
       // leaves this machine again. inviteFor may be async (the registry
       // write) and receives the requester's label for attribution. Invite

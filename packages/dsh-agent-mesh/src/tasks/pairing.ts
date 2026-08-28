@@ -123,6 +123,13 @@ export class InviteCodes {
     this.codes.set(code, { expiresAt, ...(scopes?.length ? { scopes } : {}), ...(note ? { note } : {}) })
     return { code, expiresAt }
   }
+  /** Non-destructive validity check (gate decisions before queuing). */
+  peek(code: unknown): boolean {
+    if (typeof code !== 'string' || code === '') return false
+    this.sweep()
+    return this.codes.has(code)
+  }
+
   /** Single-use consume: a valid unexpired code is consumed atomically. */
   consume(code: unknown): { scopes?: string[] } | undefined {
     if (typeof code !== 'string' || code === '') return undefined
@@ -135,7 +142,7 @@ export class InviteCodes {
 }
 
 /** The five pairing tools. request/poll are open BY DESIGN — see file header. */
-export function pairingTools(store: PairingStore, inviteFor: (label: string, scopes?: string[]) => string | Promise<string>, invites?: InviteCodes): ToolDescriptor[] {
+export function pairingTools(store: PairingStore, inviteFor: (label: string, scopes?: string[]) => string | Promise<string>, invites?: InviteCodes, inviteOnly = false): ToolDescriptor[] {
   const obj = (required: string[], properties: Record<string, unknown>): Record<string, unknown> =>
     ({ type: 'object', required, properties, additionalProperties: false })
   const requestId = { requestId: { type: 'string', minLength: 1 } }
@@ -145,10 +152,15 @@ export function pairingTools(store: PairingStore, inviteFor: (label: string, sco
       handler: async (args: JsonObject) => {
         if (typeof args.requestId !== 'string' || args.requestId.length < 16) throw pairError('TASK_PROTOCOL_INVALID_REQUEST', 'requestId must be a random string of at least 16 chars', false)
         if (typeof args.publicKey !== 'string' || !args.publicKey) throw pairError('TASK_PROTOCOL_INVALID_REQUEST', 'publicKey (x25519 jwk x) is required', false)
+        if (inviteOnly && invites?.peek(args.inviteCode) !== true) {
+          throw pairError('TASK_PAIRING_INVITE_REQUIRED', 'This fleet is invite-only — ask the operator for a one-time invite code', false)
+        }
         if (!store.request(args.requestId, args.publicKey, typeof args.label === 'string' ? args.label : 'unknown')) throw pairError('TASK_PAIRING_BUSY', 'Too many pending pair requests — try later', true)
         // Possession of a live one-time code IS the approval: seal + mint
         // immediately, no operator round-trip. A wrong/expired code degrades
-        // to the normal pending-request queue (a typo never locks anyone out).
+        // to the normal pending-request queue (a typo never locks anyone out;
+        // in invite-only fleets it was already rejected above). Consumed ONCE
+        // here — a busy queue no longer burns the code.
         const invite = invites?.consume(args.inviteCode)
         if (invite) {
           const label = typeof args.label === 'string' && args.label.trim() ? args.label : 'invite-joiner'
@@ -193,9 +205,9 @@ export function pairingTools(store: PairingStore, inviteFor: (label: string, sco
 }
 
 /** Mount fleet pairing on any registry-bearing service. One line, full onboarding. */
-export function withPairing<T extends PairingCapable>(service: T, options: { store?: PairingStore; invites?: InviteCodes; inviteFor: (label: string, scopes?: string[]) => string | Promise<string> }): T {
+export function withPairing<T extends PairingCapable>(service: T, options: { store?: PairingStore; invites?: InviteCodes; inviteOnly?: boolean; inviteFor: (label: string, scopes?: string[]) => string | Promise<string> }): T {
   const store = options.store ?? new PairingStore()
-  for (const tool of pairingTools(store, options.inviteFor, options.invites)) service.tools.register(tool)
+  for (const tool of pairingTools(store, options.inviteFor, options.invites, options.inviteOnly === true)) service.tools.register(tool)
   // Attach so in-process operator surfaces (the web card) share the exact
   // store + invite the mesh tools use — one source, never two.
   service.pairing = store

@@ -152,3 +152,20 @@ describe('invite codes — possession is the approval', () => {
     expect(service.pairPending()).toHaveLength(2)
   })
 })
+
+
+describe('invite-only fleets', () => {
+  it('rejects cold requests cleanly; a valid code joins instantly', async () => {
+    const invites = new InviteCodes()
+    const service = new TaskService(new InMemoryTaskStore(), { async execute(task) { return task.input ?? null } })
+    withPairing(service, { invites, inviteOnly: true, inviteFor: () => JSON.stringify({ version: 1, capability: 'c'.repeat(48) }) })
+    const { publicKeyX, privateKey } = generatePairKeys()
+    // cold request → explicit invite-required error, nothing queued
+    await expect(service.callTool('fleet_pair_request', { requestId: 'r6-0123456789abcdef', publicKey: publicKeyX, label: 'stranger' })).rejects.toMatchObject({ code: 'TASK_PAIRING_INVITE_REQUIRED' })
+    expect(service.pairing!.pending()).toHaveLength(0)
+    // with a code → instant approval
+    const { code } = invites.create()
+    await service.callTool('fleet_pair_request', { requestId: 'r7-0123456789abcdef', publicKey: publicKeyX, label: 'friend', inviteCode: code })
+    expect((service.pairing!.poll('r7-0123456789abcdef') as { state: string }).state).toBe('approved')
+  })
+})
