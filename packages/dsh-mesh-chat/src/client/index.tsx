@@ -173,7 +173,7 @@ export async function apply(ctx: Context): Promise<() => Promise<void>> {
     // remote namespace (cordis service — zero cross-package imports).
     const steer = ((uiCtx as unknown as { remote: Record<string, unknown> }).remote as unknown as { agentMeshWeb?: SteerFace }).agentMeshWeb
     if (steer) {
-      uiCtx.slots.inject("conversation.input.dock", () => uiCtx.slots.register({ name: "conversation.input.dock", id: "mesh-chat-steer", order: 20 }, () => <SteerDock steer={steer} />))
+      uiCtx.slots.inject("conversation.input.dock", () => uiCtx.slots.register({ name: "conversation.input.dock", id: "mesh-chat-steer", order: 20, inject: () => ({}) }, () => <SteerDock steer={steer} />))
     }
   } })
   return async () => { await ui.dispose(); await dispose() }
