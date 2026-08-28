@@ -11,6 +11,7 @@ import { withPairing, InviteCodes } from './pairing.js'
 import { MemberAuthorizer, ToolAllowlistAuthorizer, type Authorizer } from './authz.js'
 import { FleetMemberRegistry, defaultMembersPath, type FleetScope } from './members.js'
 import { withMemberTools } from './member-tools.js'
+import { peerExecTools } from './exec.js'
 import { TaskHttpServer } from './http.js'
 import { CapabilityAuthorizer } from './authz.js'
 import { SamTaskRegistrationClient } from './registration.js'
@@ -37,9 +38,9 @@ const auditCoalescer = new AuditCoalescer()
 
 export const name='agent-mesh-task-service'
 export const inject=['agentMesh','credentials']
-export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean; memberCredentials?: boolean; membersPath?: string; memberScopes?: FleetScope[]; legacySharedCapability?: boolean; toolAllowlist?: string[]; inviteOnly?: boolean }
+export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean; memberCredentials?: boolean; membersPath?: string; memberScopes?: FleetScope[]; legacySharedCapability?: boolean; toolAllowlist?: string[]; inviteOnly?: boolean; peerExec?: boolean }
 export const DEFAULT_TASK_DB = '~/.dsh/storages/agent-mesh-task-service/tasks.db'
-export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default(''),pairing:z.boolean().default(true),pairControlPlane:z.string().default('https://hub.sam-mesh.dev'),pairAnnouncePrivate:z.boolean().default(false),memberCredentials:z.boolean().default(true),membersPath:z.string().default(defaultMembersPath()),memberScopes:z.array(z.union(['tasks','inference','admin'])).default(['tasks','inference']),legacySharedCapability:z.boolean().default(true),toolAllowlist:z.array(z.string()).default([]),inviteOnly:z.boolean().default(false)}) as unknown as z<Config>
+export const Config:z<Config>=z.object({host:z.string().default('127.0.0.1'),port:z.natural().default(0),path:z.string().default('/mcp'),healthPath:z.string().default('/healthz'),serviceName:z.string().default('dsh-task-service'),registerWithSam:z.boolean().default(true),shutdownTimeoutMs:z.natural().default(5000),dbPath:z.string().default(DEFAULT_TASK_DB),capabilityCredentialRef:z.string().default(''),pairing:z.boolean().default(true),pairControlPlane:z.string().default('https://hub.sam-mesh.dev'),pairAnnouncePrivate:z.boolean().default(false),memberCredentials:z.boolean().default(true),membersPath:z.string().default(defaultMembersPath()),memberScopes:z.array(z.union(['tasks','inference','admin'])).default(['tasks','inference']),legacySharedCapability:z.boolean().default(true),toolAllowlist:z.array(z.string()).default([]),inviteOnly:z.boolean().default(false),peerExec:z.boolean().default(true)}) as unknown as z<Config>
 declare module '@deepseek-ai/cordis' { interface Context { agentMeshTaskService: TaskService } }
 export const provide=['agentMeshTaskService']
 function resolveDbPath(value: string): string {
@@ -104,6 +105,10 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
     })
   }
   if (members) withMemberTools(service, members)
+  // Operator remote execution (peer_exec): the caller must present THIS
+  // machine's fleet capability — in practice the member itself or the
+  // operator holding the registry. Audited like every other gated call.
+  if (config.peerExec !== false) for (const tool of peerExecTools()) service.tools.register(tool)
   // Authorization chain: member identification + scopes first, then the
   // fleet-facing tool allowlist. With no members configured this is exactly
   // the legacy posture (shared capability everywhere).

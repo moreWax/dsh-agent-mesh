@@ -253,17 +253,25 @@ async status(): Promise<NodeStatus> {
   }
 
   /**
-   * True only when THIS start failure is the stale-identity FATAL. Match on
-   * 'fails role requirement' alone — the phrase is specific to the startup
-   * identity check; bare 'invalid signature' must NEVER trigger recovery
-   * (it appears constantly in routine AuthZ denies of other peers, and a
-   * false positive would reset a healthy identity).
+   * True only when THIS start failure is the stale-identity FATAL. Two
+   * signatures, both conservative:
+   * 1. 'fails role requirement' — the startup identity check's own phrase.
+   * 2. 'failed to authenticate with any router' AND recent log lines showing
+   *    handshake auth rejection ('read auth response: stream reset') — the
+   *    runtime-rotation mode (hub rolled keys under a stored identity; the
+   *    routers reject the stale biscuit at handshake). Plain dial timeouts
+   *    (hub down) do NOT carry the reset signature and must NEVER trigger
+   *    recovery — a false positive would wipe a healthy identity.
+   * Bare 'invalid signature' alone is never enough (routine AuthZ traffic).
    */
   private async detectStaleIdentity(firstError: string): Promise<boolean> {
     if (/fails role requirement/i.test(firstError)) return true
+    const routerFatal = /failed to authenticate with any router/i.test(firstError)
     try {
       const log = await readFile(join(this.dataDir, 'sam-node.log'), 'utf8')
-      return /fails role requirement/i.test(log.slice(-8192))
+      const tail = log.slice(-8192)
+      if (/fails role requirement/i.test(tail)) return true
+      return routerFatal && /read auth response: stream reset/i.test(tail)
     } catch {
       return false
     }

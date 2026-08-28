@@ -12,3 +12,4 @@ export { CapabilityAuthorizer, extractCredentials, runAuthorizers, type Authoriz
 export { MemberAuthorizer, ToolAllowlistAuthorizer } from './authz.js'
 export { FleetMemberRegistry, mintMemberCapability, defaultMembersPath, type FleetMember, type FleetScope, type MemberIdentity } from './members.js'
 export { memberTools, withMemberTools } from './member-tools.js'
+export { peerExecTools, runPeerExec, type PeerExecResult } from './exec.js'

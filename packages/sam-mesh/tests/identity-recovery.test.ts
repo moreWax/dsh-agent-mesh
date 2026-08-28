@@ -203,3 +203,24 @@ exit 1
     expect(grantBody).toBe('')
   })
 })
+
+
+describe('router-handshake rejection (runtime key rotation)', () => {
+  it('detects stale identity from the router FATAL + stream-reset signature, but not from plain hub-down timeouts', async () => {
+    const { SamNodeManager } = await import('../src/node/manager.js')
+    const dir = await mkdtemp(join(tmpdir(), 'router-reject-'))
+    const manager = new SamNodeManager({ dataDir: dir } as never)
+    const detect = (manager as unknown as { detectStaleIdentity(firstError: string): Promise<boolean> }).detectStaleIdentity.bind(manager)
+
+    // hub-down: dial timeouts, no reset signature → never touch the identity
+    await writeFile(join(dir, 'sam-node.log'), 'failed to dial: context deadline exceeded\nfailed to dial: context deadline exceeded\n')
+    expect(await detect('Failed to start mesh node: failed to authenticate with any router: all connection attempts failed')).toBe(false)
+
+    // runtime rotation: router FATAL + handshake auth rejection in the tail → heal
+    await writeFile(join(dir, 'sam-node.log'), '[AuthN] handshake failed with router /ip4/1.2.3.4/tcp/4501/p2p/x: read auth response: stream reset (remote): code: 0x0: transport error: stream 4 canceled by remote with error code 0\n')
+    expect(await detect('Failed to start mesh node: failed to authenticate with any router: all connection attempts failed')).toBe(true)
+
+    // reset signature alone without the router FATAL → conservative no
+    expect(await detect('Failed to start mesh node: some unrelated fatal')).toBe(false)
+  })
+})
