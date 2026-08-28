@@ -12,7 +12,7 @@ export interface ToolMountService {
   tools: { register(tool: unknown): unknown }
 }
 
-export function fleetChatTools(store: ChatStore, options: { maxMessageChars?: number } = {}): unknown[] {
+export function fleetChatTools(store: ChatStore, options: { maxMessageChars?: number; onAppend?: (message: { id: number; kind: string; sender: string; text: string; ts: number; meta?: unknown }) => void } = {}): unknown[] {
   const maxChars = options.maxMessageChars ?? 4000
   const obj = (required: string[], properties: Record<string, unknown>): Record<string, unknown> =>
     ({ type: 'object', required, properties, additionalProperties: false })
@@ -20,10 +20,11 @@ export function fleetChatTools(store: ChatStore, options: { maxMessageChars?: nu
   return [
     { name: 'chat_send', description: 'Send a message to the fleet channel (member-gated)', auth: 'capability', requiredScopes: ['chat', 'tasks'],
       schema: obj(['text'], { text: { type: 'string', minLength: 1, maxLength: maxChars } }),
-      handler: async (args: { text?: unknown }, options?: { member?: string }) => {
+      handler: async (args: { text?: unknown }, handlerCtx?: { member?: string }) => {
         const text = typeof args.text === 'string' ? args.text.trim() : ''
         if (!text) throw new Error('text is required')
-        const message = store.append(CHANNEL, { kind: 'user', sender: options?.member ?? 'member', text })
+        const message = store.append(CHANNEL, { kind: 'user', sender: handlerCtx?.member ?? 'member', text })
+        options.onAppend?.(message)
         return { delivered: true, id: message.id }
       } },
     { name: 'chat_fetch', description: 'Fetch fleet channel messages after a cursor (member-gated)', auth: 'capability', requiredScopes: ['chat', 'tasks'],

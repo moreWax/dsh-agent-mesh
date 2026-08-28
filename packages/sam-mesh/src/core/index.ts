@@ -7,3 +7,4 @@ export type { SamClientOptions as SamCoreOptions } from "./types.js";
 export { generatePairKeys, open, seal, type SealedPayload } from './ecies.js'
 export * from './registration.js'
 export * from './failure-limiter.js'
+export * from './notify-keys.js'

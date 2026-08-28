@@ -19,6 +19,7 @@ import { SamServiceRegistrationClient } from '@morewax/sam-mesh'
 import { SQLiteChatStore } from './store.js'
 import { createInboxServer } from './inbox.js'
 import { registerFleetChatTools, type ToolMountService } from './fleet-channel.js'
+import { FleetPublisher, FleetSubscriber, chatTopic } from './notifier.js'
 import { MeshChatWebHost } from './web/host.js'
 
 export const name = 'agent-mesh-chat'
@@ -32,6 +33,8 @@ export interface Config {
   maxMessageChars?: number
   inboxCap?: number
   rateLimitPerMinute?: number
+  notifications?: boolean
+  membersPath?: string
 }
 export const Config: z<Config> = z.object({
   dbPath: z.string().default('~/.dsh/storages/agent-mesh-chat/chat.db'),
@@ -49,9 +52,11 @@ export const Config: z<Config> = z.object({
   maxMessageChars: z.natural().default(4000),
   inboxCap: z.natural().default(500),
   rateLimitPerMinute: z.natural().default(10),
+  notifications: z.boolean().default(true),
+  membersPath: z.string().default(`${process.env.HOME}/.config/sam-mesh/fleet-members.json`),
 }) as unknown as z<Config>
 
-export function apply(ctx: Context, config: Config = {}): void {
+export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const dbPath = (config.dbPath ?? '~/.dsh/storages/agent-mesh-chat/chat.db').replace(/^~(?=\/)/, homedir())
   const store = new SQLiteChatStore(dbPath)
 
@@ -74,10 +79,28 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // 2. Fleet channel: when THIS machine hosts the task service, mount chat
   // tools on its registry (they ride its endpoint + authorizer chain).
+  // The publisher fans every appended message out to members over GossipSub.
+  const fleetName = config.fleetChannel?.serviceName ?? 'dsh-task-service'
+  const meshCore = (ctx as unknown as { agentMesh: { core: { callTool<T>(name: string, args: Record<string, unknown>): Promise<T>; requestRaw(path: string, options: { method: string; body?: unknown }): Promise<{ status: number; body: AsyncIterable<Uint8Array> }> } } }).agentMesh.core
+  const emitUpdated = (): void => {
+    // Push, not poll: the card subscribes to this host event (same pattern as
+    // llm/adapters-updated) and refetches on arrival.
+    try { for (const listener of (ctx as unknown as { events?: { dispatch?(mode: string, args: unknown[]): unknown } }).events?.dispatch?.('emit', ['mesh-chat/updated']) as Array<() => unknown> | undefined ?? []) listener() } catch { /* non-fatal */ }
+  }
+  const operatorCap = await ((ctx as unknown as { agentMesh: { resolveCallCapability?: () => Promise<string | undefined> } }).agentMesh.resolveCallCapability?.().catch(() => undefined) ?? Promise.resolve(undefined))
+  const publisher = config.notifications === false
+    ? undefined
+    : new FleetPublisher(meshCore, {
+      serviceName: fleetName,
+      membersPath: (config.membersPath ?? `${homedir()}/.config/sam-mesh/fleet-members.json`).replace(/^~(?=\/)/, homedir()),
+      operatorCapability: operatorCap,
+      log: line => console.info(`[mesh-chat] ${line}`),
+    })
+  const notifyAppend = publisher ? (message: { id: number; kind: string; sender: string; text: string; ts: number; meta?: unknown }): void => { void publisher.publish(message as never); emitUpdated() } : undefined
   if (config.fleetChannel?.enabled !== false) {
     ctx.inject(['agentMeshTaskService'], (taskCtx) => {
       const service = (taskCtx as unknown as { agentMeshTaskService: ToolMountService }).agentMeshTaskService
-      registerFleetChatTools(service, store, config.maxMessageChars !== undefined ? { maxMessageChars: config.maxMessageChars } : {})
+      registerFleetChatTools(service, store, { ...(config.maxMessageChars !== undefined ? { maxMessageChars: config.maxMessageChars } : {}), ...(notifyAppend ? { onAppend: notifyAppend } : {}) })
     })
   }
 
@@ -86,9 +109,30 @@ export function apply(ctx: Context, config: Config = {}): void {
   ;(ctx as unknown as { provide(name: string, value: unknown): void }).provide('agentMeshChat', {
     postSystem: (text: string, meta?: unknown): void => {
       if (config.systemEvents === false) return
-      try { store.append('fleet', { kind: 'system', sender: 'system', text, ...(meta !== undefined ? { meta } : {}) }) } catch { /* never crash the auditor */ }
+      try {
+        const message = store.append('fleet', { kind: 'system', sender: 'system', text, ...(meta !== undefined ? { meta } : {}) })
+        notifyAppend?.(message)
+      } catch { /* never crash the auditor */ }
     },
   })
+
+  // 5. Subscriber: consume the fleet's GossipSub feed (when this machine
+  // holds a capability) — arrival pushes a host event; the card refetches.
+  let subscriber: FleetSubscriber | undefined
+  if (config.notifications !== false) {
+    const resolveCapability = (ctx as unknown as { agentMesh: { resolveCallCapability?: () => Promise<string | undefined> } }).agentMesh.resolveCallCapability
+    void (async () => {
+      const capability = await resolveCapability?.().catch(() => undefined)
+      if (!capability) return // consumer without a fleet: nothing to open
+      subscriber = new FleetSubscriber(meshCore, {
+        serviceName: fleetName,
+        capability,
+        log: line => console.info(`[mesh-chat] ${line}`),
+        onMessage: message => { emitUpdated(); void message },
+      })
+      await subscriber.start().catch(error => ctx.logger.warn(`[mesh-chat] subscribe failed: ${error instanceof Error ? error.message : String(error)}`))
+    })()
+  }
 
   // 4. The web host (card remotes). Same process, structural seam only.
   new MeshChatWebHost(ctx, {
@@ -99,6 +143,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   })
 
   ctx.effect(() => () => {
+    subscriber?.stop()
     if (registration) void new SamServiceRegistrationClient((ctx as unknown as { agentMesh: { core: import('@morewax/sam-mesh').SamRegistrationTransport } }).agentMesh.core).unregister(registration).catch(() => undefined)
     inboxServer.close()
     store.close()

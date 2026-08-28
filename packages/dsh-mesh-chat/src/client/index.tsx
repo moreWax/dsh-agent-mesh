@@ -26,6 +26,10 @@ function MessageRow({ message }: { message: ChatMessage }) {
   return <div><strong style={{ fontSize: 13 }}>{message.sender}</strong> <small style={{ opacity: 0.6 }}>{new Date(message.ts).toLocaleTimeString()}</small><div>{message.text}</div></div>
 }
 
+/** Process-local bridge: the plugin mount subscribes to the host event once;
+ * the live section's poll hooks in (and out) on mount/unmount. */
+const refreshHandle: { subscribe: (() => void) | null } = { subscribe: null }
+
 function ChatSection({ api }: { api: ChatApi }) {
   const [snapshot, setSnapshot] = useState<Snapshot>()
   const [tab, setTab] = useState<"fleet" | "dm">("fleet")
@@ -46,8 +50,12 @@ function ChatSection({ api }: { api: ChatApi }) {
       } catch { /* transient; the next tick retries */ }
     }
     void poll()
-    const t = setInterval(() => void poll(), 3000)
-    return () => { live = false; clearInterval(t) }
+    // Slow fallback; the live path is the mesh-chat/updated host event
+    // (subscribed by the plugin mount below) → refresh within ~2s of arrival.
+    const t = setInterval(() => void poll(), 15_000)
+    const onEvent = (): void => { void poll() }
+    refreshHandle.subscribe = onEvent
+    return () => { live = false; clearInterval(t); refreshHandle.subscribe = null }
   }, [api])
 
   if (!snapshot) return <section style={box}><strong>Mesh chat</strong><small>loading…</small></section>
@@ -102,6 +110,7 @@ export async function apply(ctx: Context): Promise<() => Promise<void>> {
   const dispose = await ctx.remote.$mount(TYPERT_REMOTE)
   const ui = ctx.plugin({ name: "agent-mesh-chat-ui", inject: ["slots", "remote", "remote.agentMeshChatWeb", "settingsScope"], apply: (uiCtx: Context) => {
     const api = createChatApi(uiCtx)
+    ;(uiCtx as unknown as { remote: { $on?(event: string, cb: () => void): unknown } }).remote.$on?.('mesh-chat/updated', () => refreshHandle.subscribe?.())
     uiCtx.slots.inject("settings.section", () => uiCtx.slots.register({ name: "settings.section", id: "mesh-chat", order: 71, label: "Mesh chat" }, () => <ChatSection api={api} />))
   } })
   return async () => { await ui.dispose(); await dispose() }
