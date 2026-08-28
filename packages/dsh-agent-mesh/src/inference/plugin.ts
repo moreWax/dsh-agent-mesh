@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-credentials/types'
@@ -204,15 +204,21 @@ async function applyInner(ctx: ServeContext, config: Config, statusName: string,
     await writeServeStatus(dataDir, { state: 'serving', name: statusName, mode: 'external', detail: `external backend ${target}`, target }).catch(() => undefined)
   }
 
-  // Live steering tools: mounted on the fleet task service when this machine
-  // hosts one (the chat pattern — the row and the service share the process).
+  // Live steering tools: mounted ONCE on the fleet task service (multiple
+  // serve rows share the process — duplicate registration throws). The row
+  // list comes from the serve-status files, so every row on this machine is
+  // steerable regardless of which row's apply ran first.
   ctx.inject(['agentMeshTaskService'], (taskCtx) => {
-    const service = (taskCtx as unknown as { agentMeshTaskService: { tools: { register(tool: unknown): unknown } } }).agentMeshTaskService
+    const service = (taskCtx as unknown as { agentMeshTaskService: { tools: { register(tool: unknown): unknown; get?(name: string): unknown } } }).agentMeshTaskService
+    if (typeof service.tools.get === 'function' && service.tools.get('inference_steer')) return
     const steerFileFor = (row?: string): { file: string; row: string } => {
       const name = row ?? statusName
       return { file: join(dataDir, `steer-${name}.json`), row: name }
     }
-    for (const tool of steeringTools(steerFileFor, () => [statusName])) service.tools.register(tool)
+    const listRows = (): string[] => readdirSync(dataDir)
+      .filter(f => f.startsWith('steer-') && f.endsWith('.json'))
+      .map(f => f.slice('steer-'.length, -'.json'.length))
+    for (const tool of steeringTools(steerFileFor, () => [...new Set([statusName, ...listRows()])])) service.tools.register(tool)
   })
 
   let stopAnnounce: (() => void) | undefined

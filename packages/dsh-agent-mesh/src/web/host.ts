@@ -412,7 +412,12 @@ export class AgentMeshWebHost extends TypertRemoteService {
     if (!capability) return "fleet administration needs the fleet capability — pair this machine first (Agent Mesh card → Discover fleets)"
     const services = await this.mesh.core.discoverRemoteServices({ type: "mcp", ...(request.serviceName ? { name: request.serviceName } : {}) })
     const fleets = services.filter((s): s is typeof s & { srv_name: string; peer_id: string } => typeof s.srv_name === "string" && typeof s.peer_id === "string" && s.srv_name.length > 0 && s.peer_id.length > 0)
-    const service = request.serviceName ?? fleets[0]?.srv_name
+    // Operator-chosen prefixes: 'dsh-task-service' may only be a SUFFIX of the
+    // swarm name ('morewax-dsh-task-service'). Exact first, suffix fallback.
+    const requested = request.serviceName ?? fleets[0]?.srv_name
+    const service = requested && fleets.some(f => f.srv_name === requested)
+      ? requested
+      : fleets.find(f => f.srv_name.endsWith('task-service'))?.srv_name ?? requested
     if (!service) return "no fleet services visible in the swarm"
     const provider = request.peerId
       ? fleets.find(f => f.srv_name === service && (f.peer_id === request.peerId || f.peer_id.startsWith(request.peerId!)))
