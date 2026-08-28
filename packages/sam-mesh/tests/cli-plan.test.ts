@@ -216,3 +216,39 @@ describe('buildChecks inference rows', () => {
     expect(rendered).toContain("serve row 'broken'")
   })
 })
+
+
+describe('mergeProfilePatch — default template marker', () => {
+  const invite: FleetInvite = { version: 1, controlPlane: 'https://hub.sam-mesh.dev', serviceName: 'dsh-task-service', capability: 'a'.repeat(48), announcePrivate: false, createdAt: '2026-08-28T00:00:00.000Z' }
+  const TEMPLATE = `# dsh profile root — an empty entry list. The tree is composed as patches:
+# each bundle in package.json's dsh.profile.bundles, then cordis.patch.yml, then any
+# --patch overlays. Edit cordis.patch.yml, not this file.
+[]
+`
+  it('REPLACES the bare [] marker instead of appending after it (profile boot stays parseable)', () => {
+    const merged = mergeProfilePatch(TEMPLATE, invite)
+    expect('text' in merged).toBe(true)
+    const text = (merged as { text: string }).text
+    expect(text).toContain('- id: agent-mesh')
+    expect(text).not.toMatch(/^\[\]$/m)
+    // root-level content is ONLY comments and sequence entries
+    for (const line of text.split('\n')) {
+      const t = line.trim()
+      if (t === '' || t.startsWith('#')) continue
+      expect(line.startsWith('-') || line.startsWith(' ')).toBe(true)
+    }
+  })
+  it('appends cleanly to a patch without the marker', () => {
+    const merged = mergeProfilePatch('- id: other\n  config: {}\n', invite)
+    expect('text' in merged).toBe(true)
+    expect((merged as { text: string }).text).toContain('- id: agent-mesh')
+  })
+  it('refuses a merge that would produce a non-list document (loud conflict, never written)', () => {
+    const merged = mergeProfilePatch('not-a-list: true\n', invite)
+    expect('conflict' in merged).toBe(true)
+  })
+  it('conflicts when agent-mesh rows already exist', () => {
+    const merged = mergeProfilePatch('- id: agent-mesh\n  config: {}\n', invite)
+    expect('conflict' in merged).toBe(true)
+  })
+})

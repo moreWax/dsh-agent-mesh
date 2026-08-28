@@ -341,6 +341,23 @@ export function mergeProfilePatch(existing: string | null, invite: FleetInvite):
   if (/^- id: agent-mesh/m.test(existing) || /^  - id: agent-mesh/m.test(existing) || /id: agent-mesh/.test(existing)) {
     return { conflict: `profile patch already has agent-mesh rows — reconcile manually with:\n\n${ours}` }
   }
-  const trimmed = existing.endsWith('\n') ? existing : existing + '\n'
-  return { text: trimmed + ours }
+  // The default profile template ends with a bare `[]` (an empty entry list).
+  // Appending rows AFTER a complete YAML document is a parse error that
+  // bricks profile boot — the marker must be REPLACED by the merged rows.
+  const withoutMarker = existing.replace(/(^|\n)[ \t]*\[][ \t]*(?=\n|$)/, '\n')
+  const trimmed = withoutMarker.endsWith('\n') ? withoutMarker : withoutMarker + '\n'
+  const text = trimmed + ours
+  // Loud guard, no YAML dependency: a profile patch is a LIST of row objects.
+  // Any root-level line that is not a comment, not blank, and not part of a
+  // sequence entry (leading '-' or indentation) means the merge would produce
+  // a non-list document — hand back to the human instead of writing it.
+  const lines = text.split('\n')
+  const bad = lines.findIndex(line => {
+    const t = line.trim()
+    return t !== '' && !t.startsWith('#') && !/^[\s-]/.test(line)
+  })
+  if (bad >= 0) {
+    return { conflict: `merged profile patch would not be a row list (line ${bad + 1}: ${JSON.stringify(lines[bad])}) — reconcile manually with:\n\n${ours}` }
+  }
+  return { text }
 }
