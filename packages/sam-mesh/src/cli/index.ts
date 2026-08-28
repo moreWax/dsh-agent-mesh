@@ -187,6 +187,17 @@ async function runNode(args: string[]): Promise<void> {
       if (!result.ok) exit(1)
       return
     }
+    case 'reset': {
+      // Deliberate terminal operation: clear the stored identity (PeerID
+      // kept) so `node join` can re-enroll — the half-enrolled state a
+      // failed --jwt-path join leaves behind refuses a plain join.
+      const stopped = await nodes.stop()
+      if (!stopped.ok) { stderr.write(`could not stop the node: ${stopped.error}\n`); exit(1) }
+      const reset = await nodes.resetIdentity()
+      print(reset)
+      if (!reset.ok) exit(1)
+      return
+    }
     case 'recover': {
       const recovery = await manager().recoverStaleIdentity()
       if (recovery.recovered) {
@@ -288,7 +299,7 @@ async function runNode(args: string[]): Promise<void> {
       exit(session.state === 'cancelled' ? 130 : 1)
     }
     default:
-      stderr.write('Usage: sam-mesh node <status|install|start|stop|join|recover> [--control-plane <url>] [--bootstrap-token-path <file>]\n')
+      stderr.write('Usage: sam-mesh node <status|install|start|stop|join|recover|reset> [--control-plane <url>] [--bootstrap-token-path <file>]\n')
       exit(2)
   }
 }
