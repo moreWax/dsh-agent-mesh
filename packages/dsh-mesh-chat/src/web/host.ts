@@ -38,6 +38,8 @@ export class MeshChatWebHost extends TypertRemoteService {
   constructor(
     ctx: Context,
     private readonly options: {
+      /** Set when THIS machine hosts the fleet channel — the card reads/writes the store in-process. */
+      localFleet?: { fetch(afterId: number, limit: number): unknown[]; send(text: string): void } | undefined
       store: { fetch(channel: string, afterId?: number, limit?: number): Array<{ id: number; kind: string; sender: string; text: string; ts: number; meta?: unknown }>; append(channel: string, message: { kind: 'user' | 'system'; sender: string; text: string; meta?: unknown }): { id: number } }
       inboxServiceName?: string
       fleetServiceName?: string
@@ -55,7 +57,8 @@ export class MeshChatWebHost extends TypertRemoteService {
    *  the real fleet server is the one whose chat tools actually answer. */
   private async fleetCandidates(serviceName?: string): Promise<Array<{ peerId: string; service: string }>> {
     const name = serviceName ?? this.options.fleetServiceName ?? 'dsh-task-service'
-    const all = await this.mesh.core.discoverRemoteServices({ type: 'mcp' }).catch(() => [])
+    const all = await this.mesh.core.discoverRemoteServices({ type: 'mcp' }).catch((error: unknown) => { console.info(`[mesh-chat] fleet discovery failed: ${error instanceof Error ? error.message : String(error)}`); return [] })
+    console.info(`[mesh-chat] fleet discovery: ${all.length} service(s): ${all.map(s => s.srv_name).join(', ') || '(none)'}`)
     const exact = all.filter(s => s.srv_name === name && s.peer_id)
     const fuzzy = all.filter(s => typeof s.srv_name === 'string' && s.srv_name.endsWith('task-service') && s.peer_id && !exact.includes(s))
     return [...exact, ...fuzzy].map(s => ({ peerId: s.peer_id!, service: s.srv_name }))
@@ -67,18 +70,31 @@ export class MeshChatWebHost extends TypertRemoteService {
   @Remote("chatSnapshot") async chatSnapshot(afterId: number): Promise<ChatSnapshot> {
     afterId = typeof afterId === "number" ? afterId : 0
     const fleet: ChatSnapshot['fleet'] = { available: false, cursor: afterId, messages: [] }
+    // The fleet server IS this machine: the channel store is in-process —
+    // no RPC, no discovery, no collision possible.
+    if (this.options.localFleet) {
+      const messages = this.options.localFleet.fetch(afterId, 50) as ChatMessageView[]
+      fleet.available = true
+      fleet.messages = messages
+      fleet.cursor = messages.length > 0 ? messages[messages.length - 1]!.id : afterId
+      const inbox = { serviceName: this.options.inboxServiceName ?? 'dsh-chat-inbox', messages: this.options.store.fetch('inbox', 0, 50).slice(-50) as ChatMessageView[] }
+      return { fleet, inbox }
+    }
     const candidates = await this.fleetCandidates()
     if (candidates.length === 0) fleet.error = `no '${this.options.fleetServiceName ?? 'dsh-task-service'}' fleet service visible in the swarm`
     else {
       const capability = await this.mesh.resolveCallCapability?.()
       let lastError = ''
       for (const provider of candidates) {
+        // Bounded per candidate: a collided member replica can hang the RPC —
+        // the fleet server must win within seconds, not the mesh timeout's 30.
+        const timeout = AbortSignal.timeout(6_000)
         try {
           const result = toolPayload<{ messages?: ChatMessageView[] }>(await this.mesh.core.callRemoteTool({
             peer_id: provider.peerId,
             tool_name: `mcp://${provider.service}/chat_fetch`,
             arguments: { ...(afterId > 0 ? { afterId } : {}), limit: 50, ...(capability !== undefined ? { _capability: capability } : {}) },
-          }))
+          }, timeout))
           if (Array.isArray(result.messages)) {
             fleet.available = true
             fleet.messages = result.messages
@@ -99,18 +115,23 @@ export class MeshChatWebHost extends TypertRemoteService {
     const trimmed = text.trim()
     if (!trimmed) return { ok: false, error: 'empty message' }
     if (trimmed.length > (this.options.maxMessageChars ?? 4000)) return { ok: false, error: 'message too large' }
+    if (this.options.localFleet) {
+      this.options.localFleet.send(trimmed)
+      return { ok: true, message: 'sent' }
+    }
     const candidates = await this.fleetCandidates()
     if (candidates.length === 0) return { ok: false, error: `no '${this.options.fleetServiceName ?? 'dsh-task-service'}' fleet service visible in the swarm` }
     const capability = await this.mesh.resolveCallCapability?.()
     if (capability === undefined) return { ok: false, error: 'no fleet capability on this machine — join the fleet first' }
     let lastError = ''
     for (const provider of candidates) {
+      const timeout = AbortSignal.timeout(6_000)
       try {
         await this.mesh.core.callRemoteTool({
           peer_id: provider.peerId,
           tool_name: `mcp://${provider.service}/chat_send`,
           arguments: { text: trimmed, _capability: capability },
-        })
+        }, timeout)
         return { ok: true, message: 'sent' }
       } catch (error) { lastError = error instanceof Error ? error.message : String(error) }
     }

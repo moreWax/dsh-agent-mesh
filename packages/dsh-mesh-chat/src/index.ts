@@ -107,6 +107,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     ctx.inject(['agentMeshTaskService'], (taskCtx) => {
       const service = (taskCtx as unknown as { agentMeshTaskService: ToolMountService }).agentMeshTaskService
       registerFleetChatTools(service, store, { ...(config.maxMessageChars !== undefined ? { maxMessageChars: config.maxMessageChars } : {}), ...(notifyAppend ? { onAppend: notifyAppend } : {}) })
+      localFleet = {
+        fetch: (afterId, limit) => store.fetch('fleet', afterId, limit),
+        send: text => { const message = store.append('fleet', { kind: 'user', sender: 'operator', text }); notifyAppend?.(message) },
+      }
     })
   }
 
@@ -141,7 +145,11 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   }
 
   // 4. The web host (card remotes). Same process, structural seam only.
+  // localFleet is set when the task-service injection mounts our tools here —
+  // the fleet server reads/writes its own store, never its own RPC.
+  let localFleet: { fetch(afterId: number, limit: number): unknown[]; send(text: string): void } | undefined
   new MeshChatWebHost(ctx, {
+    get localFleet() { return localFleet },
     store,
     ...(config.inbox?.serviceName ? { inboxServiceName: config.inbox.serviceName } : {}),
     ...(config.fleetChannel?.serviceName ? { fleetServiceName: config.fleetChannel.serviceName } : {}),
