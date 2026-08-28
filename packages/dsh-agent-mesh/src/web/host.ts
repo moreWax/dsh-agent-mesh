@@ -207,7 +207,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
    * card only watches status. Gated like enrollment: joining a fleet is an
    * identity-relevant act.
    */
-  @Remote("requestFleetPair") async requestFleetPair(request: { serviceName: string; peerId?: string; label?: string }, approval: ApprovedAction): Promise<{ sessionId?: string; ok: boolean; error?: string }> {
+  @Remote("requestFleetPair") async requestFleetPair(request: { serviceName: string; peerId?: string; label?: string; inviteCode?: string }, approval: ApprovedAction): Promise<{ sessionId?: string; ok: boolean; error?: string }> {
     if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
     const providers = (await this.mesh.core.discoverRemoteServices({ type: "mcp", name: request.serviceName })).filter(s => s.srv_name === request.serviceName)
     const provider = request.peerId ? providers.find(p => p.peer_id === request.peerId || p.peer_id?.startsWith(request.peerId!)) : providers[0]
@@ -217,7 +217,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const sessionId = randomBytes(8).toString("hex")
     const label = request.label?.trim() || `dsh@${(await import("node:os")).hostname()}`
     try {
-      await this.mesh.core.callRemoteTool({ peer_id: provider.peer_id, tool_name: `mcp://${request.serviceName}/fleet_pair_request`, arguments: { requestId, publicKey: keys.publicKeyX, label } })
+      await this.mesh.core.callRemoteTool({ peer_id: provider.peer_id, tool_name: `mcp://${request.serviceName}/fleet_pair_request`, arguments: { requestId, publicKey: keys.publicKeyX, label, ...(request.inviteCode?.trim() ? { inviteCode: request.inviteCode.trim() } : {}) } })
     } catch (error) { return { ok: false, error: `pair request failed: ${error instanceof Error ? error.message : String(error)}` } }
     const session = { fleet: request.serviceName, requestId, state: "waiting" as const, privateKey: keys.privateKey, timer: undefined as unknown as ReturnType<typeof setInterval> }
     this.pairSessions.set(sessionId, session)
@@ -370,6 +370,18 @@ export class AgentMeshWebHost extends TypertRemoteService {
     try {
       await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_member_revoke`, arguments: { _capability: provider.capability, id: request.id } })
       return { ok: true, message: `Member ${request.id} revoked — capability fails on the next gated call` }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  /** Generate a one-time invite code: possession is the approval (operator). */
+  @Remote("fleetInviteCreate") async fleetInviteCreate(request: { ttlMs?: number; note?: string; serviceName?: string; peerId?: string }, approval: ApprovedAction): Promise<{ ok: boolean; code?: string; expiresAt?: number; error?: string }> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    const provider = await this.fleetAdminProvider(request)
+    if (typeof provider === "string") return { ok: false, error: provider }
+    try {
+      const result = AgentMeshWebHost.toolPayload<{ code?: string; expiresAt?: number }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_invite_create`, arguments: { _capability: provider.capability, ...(request.ttlMs ? { ttlMs: request.ttlMs } : {}), ...(request.note ? { note: request.note } : {}) } }))
+      if (typeof result.code !== "string") return { ok: false, error: "service returned no code" }
+      return { ok: true, code: result.code, ...(result.expiresAt !== undefined ? { expiresAt: result.expiresAt } : {}) }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
 

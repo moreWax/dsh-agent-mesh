@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FleetMemberRegistry } from '../src/tasks/members.js'
 import { generatePairKeys, open, seal } from '@morewax/sam-mesh'
-import { PairingStore, withPairing } from '../src/tasks/pairing.js'
+import { PairingStore, withPairing, InviteCodes } from '../src/tasks/pairing.js'
 import { InMemoryTaskStore, TaskService, type TaskExecutor } from '../src/tasks/service.js'
 import { TaskHttpServer } from '../src/tasks/http.js'
 
@@ -103,5 +103,52 @@ describe('pairing mints per-member capabilities', () => {
     expect(members).toHaveLength(1)
     expect(members[0]!.name).toBe('macbook')
     expect((await registry.identify(invite.capability, shared))?.member).toBe('macbook')
+  })
+})
+
+
+describe('invite codes — possession is the approval', () => {
+  it('a valid code auto-approves: sealed on first poll, member minted, no operator round-trip', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'invite-'))
+    const registry = new FleetMemberRegistry(join(dir, 'fleet-members.json'))
+    const invites = new InviteCodes()
+    const service = new TaskService(new InMemoryTaskStore(), { async execute(task) { return task.input ?? null } })
+    withPairing(service, {
+      invites,
+      inviteFor: async (label: string, scopes?: string[]) => JSON.stringify({
+        version: 1, controlPlane: 'https://hub.sam-mesh.dev', serviceName: 'dsh-task-service',
+        capability: (await registry.add(label || 'fleet-member', (scopes?.length ? scopes : ['tasks', 'inference']) as FleetScope[], 'invite')).capability,
+        scopes: scopes?.length ? scopes : ['tasks', 'inference'],
+      }),
+    })
+    const created = invites.create(60_000, ['tasks', 'inference'], 'test')
+    expect(typeof created.code).toBe('string')
+
+    const { publicKeyX, privateKey } = generatePairKeys()
+    // request WITH the code — auto-approves instantly
+    const res = await service.callTool('fleet_pair_request', { requestId: 'r3-0123456789abcdef', publicKey: publicKeyX, label: 'laptop', inviteCode: created.code })
+    expect(res).toMatchObject({ accepted: true, autoApproved: 'invite-code' })
+    const delivered = service.pairing!.poll('r3-0123456789abcdef') as { state: string; sealed: import('@morewax/sam-mesh').SealedPayload }
+    expect(delivered.state).toBe('approved')
+    const invite = JSON.parse(open(delivered.sealed!, privateKey)) as { capability: string; scopes: string[] }
+    expect(invite.scopes).toEqual(['tasks', 'inference'])
+    expect((await registry.list())).toHaveLength(1)
+    // single-use: the code is dead
+    expect(invites.consume(created.code)).toBeUndefined()
+  })
+
+  it('a wrong or expired code degrades to the pending queue (a typo never locks anyone out)', async () => {
+    const invites = new InviteCodes({ now: () => fakeNow })
+    let fakeNow = 1_000
+    const service = new TaskService(new InMemoryTaskStore(), { async execute(task) { return task.input ?? null } })
+    withPairing(service, { invites, inviteFor: () => JSON.stringify({ version: 1, capability: 'x'.repeat(48) }) })
+    const expired = invites.create(100)
+    fakeNow += 1_000
+    const { publicKeyX } = generatePairKeys()
+    await service.callTool('fleet_pair_request', { requestId: 'r4-0123456789abcdef', publicKey: publicKeyX, label: 'a', inviteCode: expired.code })
+    expect(service.pairing!.poll('r4-0123456789abcdef')).toEqual({ state: 'pending' })
+    await service.callTool('fleet_pair_request', { requestId: 'r5-0123456789abcdef', publicKey: publicKeyX, label: 'b', inviteCode: 'totally-wrong' })
+    expect(service.pairing!.poll('r5-0123456789abcdef')).toEqual({ state: 'pending' })
+    expect(service.pairPending()).toHaveLength(2)
   })
 })

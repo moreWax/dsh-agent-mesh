@@ -31,7 +31,7 @@ describe('fleet join from the card (host-owned session)', () => {
     let requested: Record<string, unknown> | undefined
     const core = {
       discoverRemoteServices: async () => [{ srv_name: 'fleet-tasks', peer_id: 'peer-aaa' }],
-      callRemoteTool: async (input: { tool_name: string; arguments: Record<string, unknown> }) => {
+      callRemoteTool: async (input: { tool_name: string; arguments: Record<string, unknown> }): Promise<{ structuredContent: Record<string, unknown> }> => {
         if (input.tool_name.endsWith('/fleet_pair_request')) { requested = input.arguments; return { structuredContent: { accepted: true } } }
         if (input.tool_name.endsWith('/fleet_pair_poll')) return { structuredContent: { state: 'approved', sealed } }
         throw new Error('unexpected tool')

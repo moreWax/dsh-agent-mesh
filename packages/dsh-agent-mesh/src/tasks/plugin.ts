@@ -7,7 +7,7 @@ import z from '@deepseek-ai/schemastery'
 import type { AgentMeshService } from '../index.js'
 import { InMemoryTaskStore, TaskService, type TaskExecutor } from './service.js'
 import { SQLiteTaskStore } from './sqlite.js'
-import { withPairing } from './pairing.js'
+import { withPairing, InviteCodes } from './pairing.js'
 import { MemberAuthorizer, ToolAllowlistAuthorizer, type Authorizer } from './authz.js'
 import { FleetMemberRegistry, defaultMembersPath, type FleetScope } from './members.js'
 import { withMemberTools } from './member-tools.js'
@@ -62,11 +62,15 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
   const members = config.memberCredentials === false ? undefined : new FleetMemberRegistry(config.membersPath ?? defaultMembersPath())
   if (config.pairing !== false && capability !== undefined) {
     withPairing(service, {
+      // One-time invite codes: possession is the approval — a joiner with a
+      // live code skips the operator round-trip entirely.
+      invites: new InviteCodes(),
       // The invite seals a MEMBER capability — the shared secret never
       // leaves this machine again. inviteFor may be async (the registry
-      // write) and receives the requester's label for attribution.
-      inviteFor: async (label: string) => {
-        const member = await members?.add(label || 'fleet-member', (config.memberScopes ?? ['tasks','inference']) as FleetScope[], 'paired')
+      // write) and receives the requester's label for attribution. Invite
+      // codes may carry narrower scopes; the default is the row's set.
+      inviteFor: async (label: string, scopes?: string[]) => {
+        const member = await members?.add(label || 'fleet-member', (scopes?.length ? scopes : config.memberScopes ?? ['tasks','inference']) as FleetScope[], 'paired')
         return JSON.stringify({
           version: 1, controlPlane: config.pairControlPlane ?? 'https://hub.sam-mesh.dev',
           serviceName: config.serviceName ?? 'dsh-task-service',

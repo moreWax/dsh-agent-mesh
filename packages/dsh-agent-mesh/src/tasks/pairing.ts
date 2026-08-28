@@ -12,6 +12,7 @@
  * spam requests (TTL + cap) but ids are unguessable, approvals are human,
  * and the sealed payload is ciphertext without the joiner's private key.
  */
+import { randomBytes } from 'node:crypto'
 import { seal, type SealedPayload } from '@morewax/sam-mesh'
 import type { ToolDescriptor } from './tools.js'
 import { TaskProtocolError, type JsonObject } from './types.js'
@@ -107,18 +108,53 @@ function pairError(code: string, message: string, retryable: boolean): TaskProto
   return new TaskProtocolError({ code, message, retryable })
 }
 
+/** One-time, short-lived invite codes: possession IS the approval. */
+export class InviteCodes {
+  private readonly codes = new Map<string, { expiresAt: number; scopes?: string[]; note?: string }>()
+  constructor(private readonly options: PairingStoreOptions = {}) {}
+  private get now(): number { return this.options.now?.() ?? Date.now() }
+  private sweep(): void {
+    for (const [code, entry] of this.codes) if (entry.expiresAt <= this.now) this.codes.delete(code)
+  }
+  create(ttlMs = 15 * 60_000, scopes?: string[], note?: string): { code: string; expiresAt: number } {
+    this.sweep()
+    const code = randomBytes(9).toString('base64url')
+    const expiresAt = this.now + ttlMs
+    this.codes.set(code, { expiresAt, ...(scopes?.length ? { scopes } : {}), ...(note ? { note } : {}) })
+    return { code, expiresAt }
+  }
+  /** Single-use consume: a valid unexpired code is consumed atomically. */
+  consume(code: unknown): { scopes?: string[] } | undefined {
+    if (typeof code !== 'string' || code === '') return undefined
+    this.sweep()
+    const entry = this.codes.get(code)
+    if (!entry) return undefined
+    this.codes.delete(code)
+    return { ...(entry.scopes ? { scopes: entry.scopes } : {}) }
+  }
+}
+
 /** The five pairing tools. request/poll are open BY DESIGN — see file header. */
-export function pairingTools(store: PairingStore, inviteFor: (label: string) => string | Promise<string>): ToolDescriptor[] {
+export function pairingTools(store: PairingStore, inviteFor: (label: string, scopes?: string[]) => string | Promise<string>, invites?: InviteCodes): ToolDescriptor[] {
   const obj = (required: string[], properties: Record<string, unknown>): Record<string, unknown> =>
     ({ type: 'object', required, properties, additionalProperties: false })
   const requestId = { requestId: { type: 'string', minLength: 1 } }
   return [
-    { name: 'fleet_pair_request', description: 'Request to join this fleet (ungated; sealed delivery after operator approval)', auth: 'open',
-      schema: obj(['requestId', 'publicKey'], { requestId: { type: 'string', minLength: 16 }, publicKey: { type: 'string', minLength: 1 }, label: { type: 'string' } }),
+    { name: 'fleet_pair_request', description: 'Request to join this fleet (ungated). With a valid one-time inviteCode: instant approval. Otherwise sealed delivery after operator approval.', auth: 'open',
+      schema: obj(['requestId', 'publicKey'], { requestId: { type: 'string', minLength: 16 }, publicKey: { type: 'string', minLength: 1 }, label: { type: 'string' }, inviteCode: { type: 'string' } }),
       handler: async (args: JsonObject) => {
         if (typeof args.requestId !== 'string' || args.requestId.length < 16) throw pairError('TASK_PROTOCOL_INVALID_REQUEST', 'requestId must be a random string of at least 16 chars', false)
         if (typeof args.publicKey !== 'string' || !args.publicKey) throw pairError('TASK_PROTOCOL_INVALID_REQUEST', 'publicKey (x25519 jwk x) is required', false)
         if (!store.request(args.requestId, args.publicKey, typeof args.label === 'string' ? args.label : 'unknown')) throw pairError('TASK_PAIRING_BUSY', 'Too many pending pair requests — try later', true)
+        // Possession of a live one-time code IS the approval: seal + mint
+        // immediately, no operator round-trip. A wrong/expired code degrades
+        // to the normal pending-request queue (a typo never locks anyone out).
+        const invite = invites?.consume(args.inviteCode)
+        if (invite) {
+          const label = typeof args.label === 'string' && args.label.trim() ? args.label : 'invite-joiner'
+          const sealed = store.approve(args.requestId, await inviteFor(label, invite.scopes), 'invite-code')
+          if (sealed) return { accepted: true, autoApproved: 'invite-code' }
+        }
         return { accepted: true }
       } },
     { name: 'fleet_pair_poll', description: 'Poll a pair request (ungated; single-use once approved)', auth: 'open',
@@ -145,13 +181,21 @@ export function pairingTools(store: PairingStore, inviteFor: (label: string) => 
     { name: 'fleet_pair_reject', description: 'Reject a pending pair request (capability-gated)', auth: 'operator',
       schema: obj(['requestId'], requestId),
       handler: async (args: JsonObject) => ({ rejected: typeof args.requestId === 'string' && store.reject(args.requestId) }) },
+    { name: 'fleet_invite_create', description: 'Create a one-time invite code: possession is the approval (operator). Paste into a pair request for instant admission.', auth: 'operator',
+      schema: obj([], { ttlMs: { type: 'number' }, scopes: { type: 'array', items: { type: 'string' } }, note: { type: 'string' } }),
+      handler: async (args: JsonObject) => {
+        if (invites === undefined) throw pairError('TASK_PAIRING_DISABLED', 'This service does not arm invite codes', false)
+        const ttl = typeof args.ttlMs === 'number' && args.ttlMs > 0 && args.ttlMs <= 24 * 60 * 60_000 ? args.ttlMs : 15 * 60_000
+        const scopes = Array.isArray(args.scopes) ? args.scopes.filter((s): s is string => typeof s === 'string') : undefined
+        return invites.create(ttl, scopes, typeof args.note === 'string' ? args.note : undefined)
+      } },
   ]
 }
 
 /** Mount fleet pairing on any registry-bearing service. One line, full onboarding. */
-export function withPairing<T extends PairingCapable>(service: T, options: { store?: PairingStore; inviteFor: (label: string) => string | Promise<string> }): T {
+export function withPairing<T extends PairingCapable>(service: T, options: { store?: PairingStore; invites?: InviteCodes; inviteFor: (label: string, scopes?: string[]) => string | Promise<string> }): T {
   const store = options.store ?? new PairingStore()
-  for (const tool of pairingTools(store, options.inviteFor)) service.tools.register(tool)
+  for (const tool of pairingTools(store, options.inviteFor, options.invites)) service.tools.register(tool)
   // Attach so in-process operator surfaces (the web card) share the exact
   // store + invite the mesh tools use — one source, never two.
   service.pairing = store
