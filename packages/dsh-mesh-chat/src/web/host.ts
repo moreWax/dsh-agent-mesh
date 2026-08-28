@@ -57,7 +57,10 @@ export class MeshChatWebHost extends TypertRemoteService {
   }
 
   /** Snapshot both channels. afterId = last-seen fleet cursor (0 = tail-fetch the recent window). */
-  @Remote("chatSnapshot") async chatSnapshot(afterId: number = 0): Promise<ChatSnapshot> {
+  // NOTE: gateway SRC-mode reflection forbids destructured/defaulted/rest
+  // parameters on @Remote methods — plain unique identifiers only.
+  @Remote("chatSnapshot") async chatSnapshot(afterId: number): Promise<ChatSnapshot> {
+    afterId = typeof afterId === "number" ? afterId : 0
     const fleet: ChatSnapshot['fleet'] = { available: false, cursor: afterId, messages: [] }
     const provider = await this.fleetPeer()
     if (typeof provider === 'string') fleet.error = provider
