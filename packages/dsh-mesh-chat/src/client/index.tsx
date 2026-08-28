@@ -9,6 +9,7 @@ import type {} from "@deepseek-ai/dsh-api-gateway/client"
 import type {} from "@deepseek-ai/dsh-client-runtime/client"
 import type {} from "@deepseek-ai/dsh-client-ui-slots"
 import type {} from "@deepseek-ai/dsh-client-ui-settings/client"
+import type {} from "@deepseek-ai/dsh-client-ui-conversation/client"
 import React, { useEffect, useRef, useState } from "react"
 import { TYPERT_REMOTE } from "../remote.js"
 
@@ -24,6 +25,54 @@ const list: React.CSSProperties = { maxHeight: 260, overflowY: "auto", display: 
 function MessageRow({ message }: { message: ChatMessage }) {
   if (message.kind === "system") return <div style={{ opacity: 0.7 }}><small>⚙ {message.sender}: {message.text}</small></div>
   return <div><strong style={{ fontSize: 13 }}>{message.sender}</strong> <small style={{ opacity: 0.6 }}>{new Date(message.ts).toLocaleTimeString()}</small><div>{message.text}</div></div>
+}
+
+
+/** Steering via the agent-mesh remote namespace — a cordis service, NOT an
+ * import of @morewax/dsh-agent-mesh (the boundary holds: namespaces are the
+ * cross-plugin seam). */
+interface SteerFace {
+  inferenceSteerStatus(q: { row?: string; serviceName?: string; peerId?: string }): Promise<{ ok: boolean; rows?: Record<string, { systemPrompt?: string; temperature?: number; topP?: number; maxTokens?: number }>; error?: string }>
+  inferenceSteerApply(q: { row?: string; systemPrompt?: string; temperature?: number; topP?: number; maxTokens?: number; clear?: boolean; serviceName?: string; peerId?: string }, a: { approved: boolean; approvedBy?: string }): Promise<{ ok: boolean; message?: string; error?: string }>
+}
+
+/** Compact live-steering strip for the conversation composer dock: pick a
+ * served row, nudge temperature/system prompt, apply — the NEXT model request
+ * through the gate picks it up. Operator-gated service-side. */
+function SteerDock({ steer }: { steer: SteerFace }) {
+  const [status, setStatus] = useState<{ ok: boolean; rows?: Record<string, { systemPrompt?: string; temperature?: number; topP?: number; maxTokens?: number }> }>()
+  const [row, setRow] = useState("")
+  const [temperature, setTemperature] = useState("")
+  const [systemPrompt, setSystemPrompt] = useState("")
+  const [note, setNote] = useState("")
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    let live = true
+    const poll = async () => { try { const r = await steer.inferenceSteerStatus({}); if (live) setStatus(r) } catch { /* next tick */ } }
+    void poll()
+    const t = setInterval(() => void poll(), 15_000)
+    return () => { live = false; clearInterval(t) }
+  }, [steer])
+  const rows = Object.keys(status?.rows ?? {})
+  if (rows.length === 0) return null
+  const current = status?.rows?.[row || rows[0]!] ?? {}
+  const act = async () => {
+    const r = await steer.inferenceSteerApply({ row: row || rows[0]!, ...(systemPrompt ? { systemPrompt } : {}), ...(temperature !== "" ? { temperature: Number(temperature) } : {}) }, { approved: true, approvedBy: "DeepSeek Harness web user" })
+    setNote(r.ok ? "steering live" : (r.error ?? "failed"))
+  }
+  if (!open) {
+    return <button style={button} title="live model steering (operator)" onClick={() => setOpen(true)}>⚙ steer{current.temperature !== undefined || current.systemPrompt ? " ●" : ""}</button>
+  }
+  return <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+    <strong style={{ fontSize: 13 }}>⚙ steer</strong>
+    <select style={{ padding: "3px 6px", borderRadius: 6 }} value={row || rows[0]} onChange={e => setRow(e.target.value)}>{rows.map(r => <option key={r} value={r}>{r}</option>)}</select>
+    <input style={{ ...input, width: 64 }} placeholder={current.temperature !== undefined ? String(current.temperature) : "temp"} value={temperature} onChange={e => setTemperature(e.target.value)} />
+    <input style={{ ...input, flex: 1, minWidth: 140 }} placeholder={current.systemPrompt ? `system: ${current.systemPrompt.slice(0, 40)}…` : "system prompt…"} value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} />
+    <button style={button} onClick={() => void act()}>Apply</button>
+    <button style={button} onClick={() => void steer.inferenceSteerApply({ row: row || rows[0]!, clear: true }, { approved: true, approvedBy: "DeepSeek Harness web user" }).then(() => setNote("cleared"))}>Clear</button>
+    <button style={button} onClick={() => setOpen(false)}>×</button>
+    {note && <small role="status">{note}</small>}
+  </div>
 }
 
 /** Process-local bridge: the plugin mount subscribes to the host event once;
@@ -116,10 +165,16 @@ export function createChatApi(ctx: Context): ChatApi {
 export const name = "agent-mesh-chat-client"; export const inject = ["slots", "remote", "settingsScope"] as const
 export async function apply(ctx: Context): Promise<() => Promise<void>> {
   const dispose = await ctx.remote.$mount(TYPERT_REMOTE)
-  const ui = ctx.plugin({ name: "agent-mesh-chat-ui", inject: ["slots", "remote", "remote.agentMeshChatWeb", "settingsScope"], apply: (uiCtx: Context) => {
+  const ui = ctx.plugin({ name: "agent-mesh-chat-ui", inject: ["slots", "remote", "remote.agentMeshChatWeb", "remote.agentMeshWeb", "settingsScope"], apply: (uiCtx: Context) => {
     const api = createChatApi(uiCtx)
     ;(uiCtx as unknown as { remote: { $on?(event: string, cb: () => void): unknown } }).remote.$on?.('mesh-chat/updated', () => refreshHandle.subscribe?.())
     uiCtx.slots.inject("settings.section", () => uiCtx.slots.register({ name: "settings.section", id: "mesh-chat", order: 71, label: "Mesh chat" }, () => <ChatSection api={api} />))
+    // Composer dock: the live-steering strip rides the agent-mesh plugin's
+    // remote namespace (cordis service — zero cross-package imports).
+    const steer = ((uiCtx as unknown as { remote: Record<string, unknown> }).remote as unknown as { agentMeshWeb?: SteerFace }).agentMeshWeb
+    if (steer) {
+      uiCtx.slots.inject("conversation.input.dock", () => uiCtx.slots.register({ name: "conversation.input.dock", id: "mesh-chat-steer", order: 20 }, () => <SteerDock steer={steer} />))
+    }
   } })
   return async () => { await ui.dispose(); await dispose() }
 }
