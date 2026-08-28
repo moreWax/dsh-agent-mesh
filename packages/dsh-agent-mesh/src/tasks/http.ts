@@ -51,7 +51,7 @@ export class TaskHttpServer {
         if (!verdict.allow) {
           return send(res,200,{jsonrpc:'2.0',id:msg.id??null,error:{code:-32602,message:verdict.message}})
         }
-        const value=await tool.handler(args,{signal:abort.signal}); result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}
+        const value=await tool.handler(args,{signal:abort.signal,...(verdict.allow&&verdict.member?{member:verdict.member}:{})}); result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}
       }
       else return send(res,200,{jsonrpc:'2.0',id:msg.id??null,error:{code:-32601,message:'Method not found'}})
       return send(res,200,rpc(msg.id,result))

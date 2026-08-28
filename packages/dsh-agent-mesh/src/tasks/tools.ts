@@ -20,7 +20,9 @@ import type { JsonObject } from './types.js'
  */
 export type ToolAuth = 'open' | 'capability' | 'operator'
 
-export interface ToolContext { signal?: AbortSignal | undefined }
+export interface ToolContext { signal?: AbortSignal | undefined
+  /** Fleet member identified at the edge (capability → member). Chat tools attribute messages with it. */
+  member?: string | undefined }
 
 export interface ToolDescriptor {
   name: string

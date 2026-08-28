@@ -1,0 +1,20 @@
+# @morewax/dsh-mesh-chat — authenticated chat over the SAM mesh.
+# Fleet channel: member-gated, durable, system events from the task service.
+# Direct messages: every node runs a rate-limited inbox announced to the mesh.
+- insert:
+    - id: agent-mesh-chat
+      name: '@morewax/dsh-mesh-chat'
+      config:
+        dbPath: ~/.dsh/storages/agent-mesh-chat/chat.db
+        inbox:
+          host: 127.0.0.1
+          port: 0
+          serviceName: dsh-chat-inbox
+          registerWithSam: true
+        fleetChannel:
+          enabled: true
+          serviceName: dsh-task-service
+        systemEvents: true
+        maxMessageChars: 4000
+        inboxCap: 500
+        rateLimitPerMinute: 10

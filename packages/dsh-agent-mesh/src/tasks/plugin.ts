@@ -14,6 +14,7 @@ import { withMemberTools } from './member-tools.js'
 import { TaskHttpServer } from './http.js'
 import { CapabilityAuthorizer } from './authz.js'
 import { SamTaskRegistrationClient } from './registration.js'
+import type { SamServiceRegistrationClient as Client } from '@morewax/sam-mesh'
 export const name='agent-mesh-task-service'
 export const inject=['agentMesh','credentials']
 export interface Config { host?: string; port?: number; path?: string; healthPath?: string; serviceName?: string; registerWithSam?: boolean; shutdownTimeoutMs?: number; dbPath?: string; capabilityCredentialRef?: string; pairing?: boolean; pairControlPlane?: string; pairAnnouncePrivate?: boolean; memberCredentials?: boolean; membersPath?: string; memberScopes?: FleetScope[]; legacySharedCapability?: boolean; toolAllowlist?: string[]; inviteOnly?: boolean }
@@ -97,9 +98,16 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
     ...config,
     ...(capability!==undefined?{capability}:{}),
     ...(authorizers.length?{authorizers}:{}),
-    onAudit: event => console.info(`[agent-mesh-task-service] [fleet-audit] ${event.tool} ${event.allowed ? 'allowed' : 'DENIED'}${event.member ? ` member=${event.member}` : ''}`),
+    onAudit: event => {
+      console.info(`[agent-mesh-task-service] [fleet-audit] ${event.tool} ${event.allowed ? 'allowed' : 'DENIED'}${event.member ? ` member=${event.member}` : ''}`)
+      // Optional chat bridge: the dsh-mesh-chat plugin (if installed) turns
+      // fleet audit events into system messages in the fleet channel.
+      // Structural — this plugin never imports the chat package.
+      const chat = (ctx as Context & { get?(name: string): unknown }).get?.('agentMeshChat') as { postSystem?(text: string, meta?: unknown): void } | undefined
+      chat?.postSystem?.(`${event.tool} ${event.allowed ? 'allowed' : 'DENIED'}${event.member ? ` — ${event.member}` : ''}`, { tool: event.tool, allowed: event.allowed, ...(event.member ? { member: event.member } : {}) })
+    },
   }); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
-  let registration:Awaited<ReturnType<SamTaskRegistrationClient['register']>>|undefined
+  let registration:Awaited<ReturnType<Client['register']>>|undefined
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)
   let retryTimer:ReturnType<typeof setInterval>|undefined
   if(config.registerWithSam!==false){
