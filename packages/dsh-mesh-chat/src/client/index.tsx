@@ -79,7 +79,7 @@ function SteerDock({ steer }: { steer: SteerFace }) {
  * the live section's poll hooks in (and out) on mount/unmount. */
 const refreshHandle: { subscribe: (() => void) | null } = { subscribe: null }
 
-function ChatSection({ api }: { api: ChatApi }) {
+function ChatSection({ api, steer }: { api: ChatApi; steer?: SteerFace | undefined }) {
   const [snapshot, setSnapshot] = useState<Snapshot>()
   const [tab, setTab] = useState<"fleet" | "dm">("fleet")
   const [text, setText] = useState("")
@@ -126,6 +126,7 @@ function ChatSection({ api }: { api: ChatApi }) {
   const messages = tab === "fleet" ? snapshot.fleet.messages : snapshot.inbox.messages
   return <section style={box} data-testid="mesh-chat">
     <strong>Mesh chat</strong>
+    {steer && <SteerDock steer={steer} />}
     <div>
       <button style={{ ...button, fontWeight: tab === "fleet" ? 700 : 400 }} onClick={() => setTab("fleet")}>Fleet channel</button>{" "}
       <button style={{ ...button, fontWeight: tab === "dm" ? 700 : 400 }} onClick={() => setTab("dm")}>Direct</button>
@@ -168,10 +169,10 @@ export async function apply(ctx: Context): Promise<() => Promise<void>> {
   const ui = ctx.plugin({ name: "agent-mesh-chat-ui", inject: ["slots", "remote", "remote.agentMeshChatWeb", "remote.agentMeshWeb", "settingsScope"], apply: (uiCtx: Context) => {
     const api = createChatApi(uiCtx)
     ;(uiCtx as unknown as { remote: { $on?(event: string, cb: () => void): unknown } }).remote.$on?.('mesh-chat/updated', () => refreshHandle.subscribe?.())
-    uiCtx.slots.inject("settings.section", () => uiCtx.slots.register({ name: "settings.section", id: "mesh-chat", order: 71, label: "Mesh chat" }, () => <ChatSection api={api} />))
+    const steer = ((uiCtx as unknown as { remote: Record<string, unknown> }).remote as unknown as { agentMeshWeb?: SteerFace }).agentMeshWeb
+    uiCtx.slots.inject("settings.section", () => uiCtx.slots.register({ name: "settings.section", id: "mesh-chat", order: 71, label: "Mesh chat" }, () => <ChatSection api={api} {...(steer ? { steer } : {})} />))
     // Composer dock: the live-steering strip rides the agent-mesh plugin's
     // remote namespace (cordis service — zero cross-package imports).
-    const steer = ((uiCtx as unknown as { remote: Record<string, unknown> }).remote as unknown as { agentMeshWeb?: SteerFace }).agentMeshWeb
     if (steer) {
       uiCtx.slots.inject("conversation.input.dock", () => uiCtx.slots.register({ name: "conversation.input.dock", id: "mesh-chat-steer", order: 20, inject: () => ({}) }, () => <SteerDock steer={steer} />))
     }
