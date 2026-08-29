@@ -12,6 +12,7 @@ import { MemberAuthorizer, ToolAllowlistAuthorizer, type Authorizer } from './au
 import { FleetMemberRegistry, defaultMembersPath, type FleetScope } from './members.js'
 import { withMemberTools } from './member-tools.js'
 import { peerExecTools } from './exec.js'
+import { reconcileServiceName } from './service-name.js'
 import { TaskHttpServer } from './http.js'
 import { CapabilityAuthorizer } from './authz.js'
 import { SamTaskRegistrationClient } from './registration.js'
@@ -155,9 +156,18 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
     // concurrently (plugin row ordering is not a readiness contract), or simply
     // absent. Attempt inline, then retry on a slow bounded loop; the service
     // stays local-only until a retry lands.
+    // B2: never shadow the fleet's name — a consumer replica renames itself
+    // at boot when the configured name is already announced remotely (the
+    // operator's own service is never self-listed, so operators pass through).
+    let effectiveName=config.serviceName ?? 'dsh-task-service'
+    try {
+      const remotes=await (ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core.discoverRemoteServices({type:'mcp',name:effectiveName})
+      const reconciled=reconcileServiceName(effectiveName,remotes.map(s=>s.srv_name).filter((n): n is string => typeof n === 'string'))
+      if(reconciled.renamed){ effectiveName=reconciled.name; console.info(`[agent-mesh-task-service] '${config.serviceName}' is already announced by the fleet — registering as '${effectiveName}' (consumer replica)`) }
+    } catch { /* discovery down at boot — keep the configured name */ }
     const startReannounce=():void=>{
       if(stopReannounce) return
-      const name=config.serviceName ?? 'dsh-task-service'
+      const name=effectiveName
       void import('@morewax/sam-mesh/node').then(({ startServiceAnnounceLoop })=>{
         stopReannounce=startServiceAnnounceLoop({
           name, type:'SERVICE_TYPE_MCP', targetUrl:address.mcpUrl,
@@ -168,7 +178,7 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
       })
     }
     const attempt=async():Promise<boolean>=>{
-      try{ registration=await registry.register(address,config.serviceName === undefined ? {} : {name:config.serviceName}); startReannounce(); return true }
+      try{ registration=await registry.register(address,{name:effectiveName}); startReannounce(); return true }
       catch(error){ ctx.logger.warn(`task service SAM registration failed (will retry): ${error instanceof Error?error.message:String(error)}`); return false }
     }
     if(!await attempt()){
