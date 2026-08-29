@@ -208,8 +208,15 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const capability = await this.mesh.resolveCallCapability?.()
     if (!capability) membership = { state: "unpaired", detail: "no fleet capability on this machine — join a fleet" }
     else {
-      const fleet = services.find(s => typeof s.srv_name === "string" && s.srv_name.endsWith("task-service") && s.peer_id)
-      if (!fleet?.peer_id) membership = { state: "stale", detail: "capability stored but no fleet service visible to probe" }
+      // escha's own fleet service is never self-listed; member replicas
+      // ('-member') are NOT the fleet — probing them with our capability is a
+      // guaranteed false 'stale'. A machine that HOSTS the fleet is valid by
+      // construction; consumers probe the real (non-member) entry.
+      const localServices = await this.mesh.core.listLocalServices().catch(() => [] as Array<{ name?: string }>)
+      const hostsFleet = localServices.some(s => typeof s.name === "string" && s.name.endsWith("task-service") && !s.name.endsWith("-member"))
+      const fleet = hostsFleet ? undefined : services.find(s => typeof s.srv_name === "string" && s.srv_name.endsWith("task-service") && !s.srv_name.endsWith("-member") && s.peer_id)
+      if (hostsFleet) membership = { state: "valid", detail: "this machine operates the fleet" }
+      else if (!fleet?.peer_id) membership = { state: "stale", detail: "capability stored but no fleet service visible to probe" }
       else {
         try {
           await this.mesh.core.callRemoteTool({ peer_id: fleet.peer_id, tool_name: `mcp://${fleet.srv_name}/chat_fetch`, arguments: { limit: 1, _capability: capability } }, AbortSignal.timeout(4_000))
