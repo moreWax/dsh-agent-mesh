@@ -66,13 +66,27 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const port = config.inbox?.port ?? 0
   const inboxName = config.inbox?.serviceName ?? 'dsh-chat-inbox'
   let registration: Awaited<ReturnType<SamServiceRegistrationClient['register']>> | undefined
+  let stopInboxReannounce: (() => void) | undefined
   const registerInbox = async (): Promise<void> => {
     await new Promise<void>((resolve, reject) => { inboxServer.once('error', reject); inboxServer.listen(port, host, () => resolve()) })
     if (config.inbox?.registerWithSam !== false) {
       const client = new SamServiceRegistrationClient((ctx as unknown as { agentMesh: { core: import('@morewax/sam-mesh').SamRegistrationTransport } }).agentMesh.core)
       const address = inboxServer.address()
-      registration = await client.register(`http://${host}:${typeof address === 'object' && address ? address.port : port}/mcp`, { name: inboxName, description: 'dsh-mesh-chat DM inbox' })
+      const mcpUrl = `http://${host}:${typeof address === 'object' && address ? address.port : port}/mcp`
+      registration = await client.register(mcpUrl, { name: inboxName, description: 'dsh-mesh-chat DM inbox' })
         .catch(error => { ctx.logger.warn(`chat inbox registration failed (will run local-only): ${error instanceof Error ? error.message : String(error)}`); return undefined })
+      if (registration) {
+        const { startServiceAnnounceLoop } = await import('@morewax/sam-mesh/node')
+        stopInboxReannounce = startServiceAnnounceLoop({
+          name: inboxName, type: 'SERVICE_TYPE_MCP', targetUrl: mcpUrl,
+          description: 'dsh-mesh-chat DM inbox',
+          register: async body => {
+            const res = await (ctx as unknown as { agentMesh: { core: { requestRaw(path: string, options: { method: string; body?: unknown }): Promise<{ status: number }> } } }).agentMesh.core.requestRaw('/sam/service/register', { method: 'POST', body })
+            if (res.status < 200 || res.status >= 300) throw new Error(`re-register failed (${res.status})`)
+          },
+          intervalMs: 30_000,
+        })
+      }
     }
   }
   void registerInbox()
@@ -158,6 +172,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
 
   ctx.effect(() => () => {
     subscriber?.stop()
+    if (stopInboxReannounce) stopInboxReannounce()
     if (registration) void new SamServiceRegistrationClient((ctx as unknown as { agentMesh: { core: import('@morewax/sam-mesh').SamRegistrationTransport } }).agentMesh.core).unregister(registration).catch(() => undefined)
     inboxServer.close()
     store.close()

@@ -171,6 +171,38 @@ describe('FailureLimiter (denial flood control)', () => {
   })
 })
 
+describe('startServiceAnnounceLoop', () => {
+  it('re-announces on the interval until stopped, and never fires the first tick early', async () => {
+    const calls: unknown[] = []
+    const { startServiceAnnounceLoop } = await import('../src/node/inference-proxy.js')
+    const stop = startServiceAnnounceLoop({
+      name: 'svc', type: 'SERVICE_TYPE_MCP', targetUrl: 'http://127.0.0.1:9/mcp',
+      register: async body => { calls.push(body) },
+      intervalMs: 15,
+    })
+    expect(calls).toHaveLength(0)
+    await new Promise(r => setTimeout(r, 60))
+    expect(calls.length).toBeGreaterThanOrEqual(2)
+    stop()
+    const at = calls.length
+    await new Promise(r => setTimeout(r, 40))
+    expect(calls.length).toBe(at)
+    expect((calls[0] as { service: { name: string; type: string } }).service).toMatchObject({ name: 'svc', type: 'SERVICE_TYPE_MCP' })
+  })
+  it('logs and retries on register failure without dying', async () => {
+    const logs: string[] = []
+    const { startServiceAnnounceLoop } = await import('../src/node/inference-proxy.js')
+    const stop = startServiceAnnounceLoop({
+      name: 'svc', type: 'SERVICE_TYPE_MCP', targetUrl: 'http://x',
+      register: async () => { throw new Error('boom') },
+      intervalMs: 15, onLog: line => logs.push(line),
+    })
+    await new Promise(r => setTimeout(r, 45))
+    stop()
+    expect(logs.some(l => l.includes('boom'))).toBe(true)
+  })
+})
+
 describe('startAnnounceLoop', () => {
 
   it('registers as SERVICE_TYPE_INFERENCE and re-announces until stopped', async () => {

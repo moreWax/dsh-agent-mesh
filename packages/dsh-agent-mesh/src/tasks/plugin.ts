@@ -147,6 +147,7 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
     },
   }); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<Client['register']>>|undefined
+  let stopReannounce:(()=>void)|undefined
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)
   let retryTimer:ReturnType<typeof setInterval>|undefined
   if(config.registerWithSam!==false){
@@ -154,8 +155,20 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
     // concurrently (plugin row ordering is not a readiness contract), or simply
     // absent. Attempt inline, then retry on a slow bounded loop; the service
     // stays local-only until a retry lands.
+    const startReannounce=():void=>{
+      if(stopReannounce) return
+      const name=config.serviceName ?? 'dsh-task-service'
+      void import('@morewax/sam-mesh/node').then(({ startServiceAnnounceLoop })=>{
+        stopReannounce=startServiceAnnounceLoop({
+          name, type:'SERVICE_TYPE_MCP', targetUrl:address.mcpUrl,
+          register: async body => { const res=await (ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core.requestRaw('/sam/service/register',{method:'POST',body}); if(res.status<200||res.status>=300) throw new Error(`re-register failed (${res.status})`) },
+          intervalMs: 30_000,
+          onLog: line => console.info(`[agent-mesh-task-service] ${line}`),
+        })
+      })
+    }
     const attempt=async():Promise<boolean>=>{
-      try{ registration=await registry.register(address,config.serviceName === undefined ? {} : {name:config.serviceName}); return true }
+      try{ registration=await registry.register(address,config.serviceName === undefined ? {} : {name:config.serviceName}); startReannounce(); return true }
       catch(error){ ctx.logger.warn(`task service SAM registration failed (will retry): ${error instanceof Error?error.message:String(error)}`); return false }
     }
     if(!await attempt()){
@@ -164,5 +177,5 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
       retryTimer.unref?.()
     }
   }
-  ctx.effect(()=>async()=>{if(retryTimer)clearInterval(retryTimer);if(registration) await registry.unregister(registration).catch(error=>ctx.logger.warn(`task service unregister failed: ${error instanceof Error?error.message:String(error)}`));await server.stop();store.close()},'agent-mesh-task-service.lifecycle')
+  ctx.effect(()=>async()=>{if(retryTimer)clearInterval(retryTimer);if(stopReannounce)stopReannounce();if(registration) await registry.unregister(registration).catch(error=>ctx.logger.warn(`task service unregister failed: ${error instanceof Error?error.message:String(error)}`));await server.stop();store.close()},'agent-mesh-task-service.lifecycle')
 }

@@ -328,6 +328,43 @@ export function startAnnounceLoop(options: AnnounceOptions): () => void {
   return () => { stopped = true; if (timer) clearTimeout(timer) }
 }
 
+export interface ServiceAnnounceOptions {
+  /** The full /sam/service/register body minus nothing (name + type + target_url + optional description). */
+  name: string
+  type: 'SERVICE_TYPE_MCP' | 'SERVICE_TYPE_INFERENCE'
+  targetUrl: string
+  description?: string
+  register: (body: unknown) => Promise<void>
+  intervalMs?: number
+  onLog?: (line: string) => void
+}
+
+/**
+ * Generic re-announce loop for ANY announced service. Registrations live in
+ * node memory only AND can expire hub-side — a service announced once at boot
+ * silently vanishes (the task-service/chat-inbox outage class). The loop
+ * re-announces on an interval: node restarts and TTL expiries self-heal.
+ * Returns a stop function.
+ */
+export function startServiceAnnounceLoop(options: ServiceAnnounceOptions): () => void {
+  const intervalMs = options.intervalMs ?? 30_000
+  const log = options.onLog ?? (() => {})
+  let stopped = false
+  let timer: NodeJS.Timeout | undefined
+  const body = { service: { name: options.name, type: options.type, ...(options.description ? { description: options.description } : {}) }, target_url: options.targetUrl }
+  const tick = async (): Promise<void> => {
+    try {
+      await options.register(body)
+    } catch (error) {
+      log(`re-announce ${options.name} failed (retrying): ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (!stopped) timer = setTimeout(() => void tick(), intervalMs)
+  }
+  // First tick is delayed: initial registration already happened at boot.
+  timer = setTimeout(() => void tick(), intervalMs)
+  return () => { stopped = true; if (timer) clearTimeout(timer) }
+}
+
 export interface BackendCandidate { name: string; url: string }
 
 /** Well-known loopback OpenAI-compatible backends, in priority order. */
