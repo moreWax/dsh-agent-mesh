@@ -280,3 +280,26 @@ describe('doctor chat checks', () => {
     expect(checks.find(c => c.name === 'chat inbox announced')).toBeUndefined()
   })
 })
+
+
+describe('doctor trust-health checks', () => {
+  const base = { installed: true, enrolled: true, running: true }
+  it('ok when no rejections; fails with the heal fix at 3+', () => {
+    const healthy = buildChecks({ ...base, trust: { rejectionCount: 0, hasRefreshToken: true } })
+    expect(healthy.find(c => c.name === 'trust: verifies hub signatures')!.ok).toBe(true)
+    const stale = buildChecks({ ...base, trust: { rejectionCount: 4, hasRefreshToken: true } })
+    const check = stale.find(c => c.name === 'trust: verifies hub signatures')!
+    expect(check.ok).toBe(false)
+    expect(check.fix).toContain('node recover')
+  })
+  it('refresh-token check warns when self-heal is impossible', () => {
+    const checks = buildChecks({ ...base, trust: { rejectionCount: 0, hasRefreshToken: false } })
+    const check = checks.find(c => c.name === 'identity refresh token')!
+    expect(check.ok).toBe(false)
+    expect(check.detail).toContain('browser re-enroll')
+  })
+  it('trust checks absent when not probed', () => {
+    const checks = buildChecks({ ...base })
+    expect(checks.find(c => c.name === 'trust: verifies hub signatures')).toBeUndefined()
+  })
+})

@@ -15,6 +15,7 @@ import { homedir } from 'node:os'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { bboltGet, hasMeshIdentity, readEnrolledHub } from './bbolt.js'
+import { isTrustStale } from './trust.js'
 import { resolveBundledBinary } from './bundled.js'
 
 const execFileAsync = promisify(execFile)
@@ -206,7 +207,7 @@ async status(): Promise<NodeStatus> {
    */
   async start(options: { apiToken?: string } = {}): Promise<ActionResult> {
     const before = await this.status()
-    if (before.running) return { ok: true, message: `sam-node already running${before.pid ? ` (pid ${before.pid})` : ''}` }
+    if (before.running) { this.startTrustWatcher(); return { ok: true, message: `sam-node already running${before.pid ? ` (pid ${before.pid})` : ''}` } }
     if (!before.installed) return { ok: false, error: 'sam-node is not installed or not on PATH' }
     try {
       if (options.apiToken !== undefined) {
@@ -221,6 +222,7 @@ async status(): Promise<NodeStatus> {
       if (this.announcePrivate !== undefined) runArgs.push(`--announce-private=${this.announcePrivate}`)
       await execFileAsync(this.binary, runArgs,
         { timeout: 30_000 })
+      this.startTrustWatcher()
       return { ok: true, message: 'sam-node started' }
     } catch (error) {
       const first = error instanceof Error ? error.message : String(error)
@@ -234,6 +236,7 @@ async status(): Promise<NodeStatus> {
       if (await this.detectStaleIdentity(first)) {
         const recovery = await this.recoverStaleIdentity()
         if (recovery.recovered) {
+          this.startTrustWatcher()
           return { ok: true, message: 'sam-node started (self-healed a stale identity via stored refresh token)' }
         }
         return { ok: false, error: `${first} — automatic re-enrollment failed (${recovery.reason}); re-enroll via the card or 'sam-mesh node join'` }
@@ -274,6 +277,63 @@ async status(): Promise<NodeStatus> {
       return routerFatal && /read auth response: stream reset/i.test(tail)
     } catch {
       return false
+    }
+  }
+
+  /**
+   * Runtime trust watcher (A1): the startup detector only sees boot-time
+   * FATALs — a hub rotation under a RUNNING node used to go unnoticed until
+   * someone noticed an empty swarm. The watcher scans the node log tail on an
+   * interval; when the trust detector says our identity is being rejected
+   * (>= 3 distinct peers), it stops the node and runs the same silent ladder
+   * (refresh → reset → re-enroll). A dead refresh token escalates LOUDLY to
+   * the status file the card/doctor can surface — never a silent dead mesh.
+   */
+  private trustWatcher: ReturnType<typeof setInterval> | undefined
+  private trustWatcherBusy = false
+
+  protected startTrustWatcher(intervalMs = 60_000): void {
+    if (this.trustWatcher !== undefined) return
+    this.trustWatcher = setInterval(() => void this.trustWatchTick(), intervalMs)
+    this.trustWatcher.unref?.()
+  }
+
+  protected stopTrustWatcher(): void {
+    if (this.trustWatcher !== undefined) { clearInterval(this.trustWatcher); this.trustWatcher = undefined }
+  }
+
+  private async trustWatchTick(): Promise<void> {
+    if (this.trustWatcherBusy) return
+    this.trustWatcherBusy = true
+    try {
+      const status = await this.status().catch(() => undefined)
+      if (!status?.running) return
+      const logPath = join(this.dataDir, 'sam-node.log')
+      const log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log === '' || !isTrustStale(log.slice(-16_384))) return
+      // Our identity is being rejected mesh-wide — same ladder as the startup
+      // heal, invoked at runtime. Guard against re-entrancy: the ladder
+      // replaces the node, which restarts the watcher via start().
+      // Cooldown: a heal attempt writes a marker; another attempt is skipped
+      // for 15 minutes. Healing against a hub that is itself mid-rotation
+      // would otherwise churn identity every tick.
+      const cooldownPath = join(this.dataDir, '.trust-heal-cooldown')
+      const lastHeal = Number(await readFile(cooldownPath, 'utf8').catch(() => '0')) || 0
+      if (Date.now() - lastHeal < 15 * 60_000) return
+      await writeFile(cooldownPath, String(Date.now()), { mode: 0o600 }).catch(() => undefined)
+      this.stopTrustWatcher()
+      const recovery = await this.recoverStaleIdentity()
+      if (recovery.recovered) {
+        console.info('[agent-mesh] runtime trust heal: identity renewed after hub key rotation (no human needed)')
+        this.startTrustWatcher()
+      } else {
+        console.error(`[agent-mesh] identity trust is stale and the stored refresh token cannot heal it: ${recovery.reason} — re-enroll via the card or 'sam-mesh node join'`)
+        await writeFile(join(this.dataDir, 'needs-reenroll.txt'), `${recovery.reason}\n`, { mode: 0o600 }).catch(() => undefined)
+      }
+    } catch (error) {
+      console.warn(`[agent-mesh] trust watcher tick failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      this.trustWatcherBusy = false
     }
   }
 
@@ -343,6 +403,7 @@ async status(): Promise<NodeStatus> {
 
   /** Stop the node via its pidfile. Idempotent. */
   async stop(): Promise<ActionResult> {
+    this.stopTrustWatcher()
     const before = await this.status()
     if (before.pid === null) return { ok: true, message: 'sam-node is not running (no live pidfile)' }
     try {

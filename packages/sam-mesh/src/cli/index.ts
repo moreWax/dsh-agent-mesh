@@ -431,9 +431,22 @@ else if (command === 'doctor') {
       else chat.channel = 'unpaired'
     }
   } catch { chat = null }
+  // Trust health: rejection storm in the recent node log + refresh-token presence.
+  let trust: { rejectionCount?: number | undefined; hasRefreshToken?: boolean | undefined } | undefined
+  try {
+    const dataDir = process.env.SAM_DATA_DIR ?? `${process.env.HOME}/.config/sam-mesh`
+    const logTail = existsSync(`${dataDir}/sam-node.log`) ? (await readFile(`${dataDir}/sam-node.log`, 'utf8')).slice(-16384) : ''
+    const { trustRejections } = await import('../node/index.js')
+    let hasRefreshToken: boolean | undefined
+    try {
+      const { bboltGet } = await import('../node/index.js')
+      hasRefreshToken = bboltGet(await readFile(`${dataDir}/agent.db`), 'identity', 'refresh_token') !== null
+    } catch { hasRefreshToken = undefined }
+    trust = { rejectionCount: trustRejections(logTail).distinctPeers, ...(hasRefreshToken !== undefined ? { hasRefreshToken } : {}) }
+  } catch { trust = undefined }
   const checks = buildChecks({
     installed: status.installed, enrolled: status.enrolled, running: status.running,
-    peerCount, serviceCount, localServiceCount, runtimeTag, modelStore, serveRows, chat,
+    peerCount, serviceCount, localServiceCount, runtimeTag, modelStore, serveRows, chat, ...(trust !== undefined ? { trust } : {}),
   })
   if (status.enrolled && status.enrolledHub) {
     const enrolledCheck = checks.find(ch => ch.name === 'enrolled on a hub')

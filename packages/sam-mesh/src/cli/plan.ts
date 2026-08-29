@@ -81,6 +81,9 @@ export interface DoctorInputs {
   serveRows?: Array<{ name: string; state: string; detail?: string | undefined; mode?: 'runtime' | 'external' | undefined }> | undefined
   /** Chat posture: inbox announcements visible, fleet channel reachability. null = chat not installed. */
   chat?: { inboxVisible?: number | undefined; channel?: 'ok' | 'unavailable' | 'unpaired' | undefined } | null | undefined
+  /** Trust health: does this node still verify hub-signed biscuits? rejectionCount = distinct peers
+   *  that rejected OUR catalog fetch in the recent log tail (0/undefined = no evidence of staleness). */
+  trust?: { rejectionCount?: number | undefined; hasRefreshToken?: boolean | undefined } | undefined
 }
 
 /** Each failed check carries the exact next command — doctor is advice, not just status. */
@@ -124,6 +127,23 @@ export function buildChecks(input: DoctorInputs): DoctorCheck[] {
   }
   for (const row of input.serveRows ?? []) {
     checks.push({ name: `serve row '${row.name}'`, ok: row.state === 'serving', detail: row.detail, fix: row.state === 'error' ? `fix the serve row config (Agent Mesh card → Share models) — last error: ${row.detail ?? 'unknown'}` : row.state === 'starting' ? 'model still loading — check again shortly' : undefined })
+  }
+  if (input.trust !== undefined) {
+    const rejections = input.trust.rejectionCount ?? 0
+    checks.push({
+      name: 'trust: verifies hub signatures',
+      ok: rejections < 3,
+      detail: rejections < 3 ? (rejections === 0 ? 'no recent rejections of our identity' : `${rejections} peer rejection(s) — within tolerance`) : `${rejections} peers rejected our catalog fetch — identity trust is stale (hub key rotation missed)`,
+      fix: rejections < 3 ? undefined : 'sam-mesh node recover (self-heals via stored refresh token; browser only if it is dead)',
+    })
+    if (input.trust.hasRefreshToken !== undefined) {
+      checks.push({
+        name: 'identity refresh token',
+        ok: input.trust.hasRefreshToken,
+        detail: input.trust.hasRefreshToken ? 'self-heal possible on the next rotation' : 'no stored refresh token — the next hub key rotation will need a browser re-enroll',
+        fix: input.trust.hasRefreshToken ? undefined : 're-enroll once more (sam-mesh node reset && sam-mesh node join) to store a refresh token',
+      })
+    }
   }
   if (input.chat != null) {
     const visible = input.chat.inboxVisible ?? 0

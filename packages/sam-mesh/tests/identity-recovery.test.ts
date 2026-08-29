@@ -224,3 +224,42 @@ describe('router-handshake rejection (runtime key rotation)', () => {
     expect(await detect('Failed to start mesh node: some unrelated fatal')).toBe(false)
   })
 })
+
+
+describe('runtime trust watcher', () => {
+  it('runs the heal ladder when the log tail says our identity is stale; stays quiet when healthy', async () => {
+    const { SamNodeManager } = await import('../src/node/manager.js')
+    const dir = await mkdtemp(join(tmpdir(), 'trust-watch-'))
+    const manager = new SamNodeManager({ dataDir: dir } as never)
+    const calls: string[] = []
+    // stub status() → running, recoverStaleIdentity → records
+    ;(manager as unknown as { status: () => Promise<{ running: boolean }> }).status = async () => ({ running: true })
+    ;(manager as unknown as { recoverStaleIdentity: () => Promise<{ recovered: boolean }> }).recoverStaleIdentity = async () => { calls.push('recover'); return { recovered: true } }
+    ;(manager as unknown as { startTrustWatcher(): void }).startTrustWatcher = () => { calls.push('watch-restart') }
+    ;(manager as unknown as { stopTrustWatcher(): void }).stopTrustWatcher = () => { calls.push('watch-stop') }
+
+    const tick = (manager as unknown as { trustWatchTick(): Promise<void> }).trustWatchTick.bind(manager)
+
+    // healthy tail: nothing happens
+    await writeFile(join(dir, 'sam-node.log'), '[Discovery] FindProvidersByType returned 7 peers\n')
+    await tick()
+    expect(calls).toEqual([])
+
+    // stale tail: 3 distinct peers reject us → stop watcher, recover, restart watcher
+    const reject = (p: string) => `[Discovery] catalog fetch from ${p} failed: auth rejected by ${p}: authorization failed`
+    await writeFile(join(dir, 'sam-node.log'), [reject('12D3KooWAAAA1111x'), reject('12D3KooWBBBB2222x'), reject('12D3KooWCCCC3333x')].join('\n'))
+    await tick()
+    expect(calls).toEqual(['watch-stop', 'recover', 'watch-restart'])
+
+    // cooldown: a second stale tick inside 15 minutes is skipped (no churn against a mid-rotation hub)
+    ;(manager as unknown as { recoverStaleIdentity: () => Promise<{ recovered: boolean; reason?: string }> }).recoverStaleIdentity = async () => { calls.push('recover2'); return { recovered: false, reason: 'refresh token rejected (invalid_request)' } }
+    await tick()
+    expect(calls).not.toContain('recover2')
+    // ...but once the cooldown marker is old, the escalation marker file lands
+    await writeFile(join(dir, '.trust-heal-cooldown'), '0')
+    await tick()
+    expect(calls).toContain('recover2')
+    const marker = await readFile(join(dir, 'needs-reenroll.txt'), 'utf8')
+    expect(marker).toContain('refresh token rejected')
+  })
+})
