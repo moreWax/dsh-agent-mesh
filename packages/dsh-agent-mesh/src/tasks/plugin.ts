@@ -156,15 +156,20 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
     // concurrently (plugin row ordering is not a readiness contract), or simply
     // absent. Attempt inline, then retry on a slow bounded loop; the service
     // stays local-only until a retry lands.
-    // B2: never shadow the fleet's name — a consumer replica renames itself
-    // at boot when the configured name is already announced remotely (the
-    // operator's own service is never self-listed, so operators pass through).
+    // B2: never shadow the fleet's name — a CONSUMER replica renames itself
+    // at boot when the configured name is already announced remotely. The
+    // OPERATOR never renames: it holds the fleet's shared capability (the
+    // pairing gate), which is the ownership claim on the name. (First version
+    // renamed escha itself because discovery timing is racy at boot.)
     let effectiveName=config.serviceName ?? 'dsh-task-service'
-    try {
-      const remotes=await (ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core.discoverRemoteServices({type:'mcp',name:effectiveName})
-      const reconciled=reconcileServiceName(effectiveName,remotes.map(s=>s.srv_name).filter((n): n is string => typeof n === 'string'))
-      if(reconciled.renamed){ effectiveName=reconciled.name; console.info(`[agent-mesh-task-service] '${config.serviceName}' is already announced by the fleet — registering as '${effectiveName}' (consumer replica)`) }
-    } catch { /* discovery down at boot — keep the configured name */ }
+    const isOperator=capability!==undefined
+    if(!isOperator){
+      try {
+        const remotes=await (ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core.discoverRemoteServices({type:'mcp',name:effectiveName})
+        const reconciled=reconcileServiceName(effectiveName,remotes.map(s=>s.srv_name).filter((n): n is string => typeof n === 'string'))
+        if(reconciled.renamed){ effectiveName=reconciled.name; console.info(`[agent-mesh-task-service] '${config.serviceName}' is already announced by the fleet — registering as '${effectiveName}' (consumer replica)`) }
+      } catch { /* discovery down at boot — keep the configured name */ }
+    }
     const startReannounce=():void=>{
       if(stopReannounce) return
       const name=effectiveName
