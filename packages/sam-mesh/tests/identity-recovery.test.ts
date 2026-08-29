@@ -263,3 +263,65 @@ describe('runtime trust watcher', () => {
     expect(marker).toContain('refresh token rejected')
   })
 })
+
+
+describe('enrollment auto-retry on transient failures (A3)', () => {
+  it('respawns the child in-place on a transient post-enroll failure — same sessionId, fresh code, then completes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'enroll-retry-'))
+    const stub = join(dir, 'stub-node.sh')
+    await writeFile(stub, `#!/bin/sh
+MARKER="${dir}/.attempt"
+N=$(cat "$MARKER" 2>/dev/null || echo 0)
+N=$((N+1)); echo $N > "$MARKER"
+if [ "$N" -lt 2 ]; then
+  echo "Open this URL in a browser: https://auth.sam-mesh.dev/device?user_code=AAAA-BBBB"
+  echo "Enter code: AAAA-BBBB"
+  echo "2026-01-01 FATAL Enrollment failed: failed to connect and authenticate with any router after HTTP enrollment (last error: fatal authentication error: failed to verify router biscuit: no valid key found for verification: biscuit: invalid signature)"
+  exit 1
+fi
+echo "Open this URL in a browser: https://auth.sam-mesh.dev/device?user_code=CCCC-DDDD"
+echo "Enter code: CCCC-DDDD"
+echo "Enrolled."
+exit 0
+`, { mode: 0o755 })
+    await chmod(stub, 0o755)
+    const { EnrollmentSession } = await import('../src/node/manager.js')
+    const session = new EnrollmentSession(stub, [], 'https://hub.sam-mesh.dev')
+    await session.done
+    expect(session.state).toBe('complete')
+    expect(session.attempts).toBe(2)
+  })
+
+  it('expired device codes also respawn (up to the attempt cap), then fail with the real error', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'enroll-expire-'))
+    const stub = join(dir, 'stub-node.sh')
+    await writeFile(stub, `#!/bin/sh
+echo "Open this URL in a browser: https://auth.sam-mesh.dev/device?user_code=XXXX-YYYY"
+echo "Enter code: XXXX-YYYY"
+echo "FATAL Failed to join: failed to get token: device authorization expired before completion"
+exit 1
+`, { mode: 0o755 })
+    await chmod(stub, 0o755)
+    const { EnrollmentSession } = await import('../src/node/manager.js')
+    const session = new EnrollmentSession(stub, [], 'https://hub.sam-mesh.dev')
+    await session.done
+    expect(session.state).toBe('failed')
+    expect(session.attempts).toBe(3) // MAX_ATTEMPTS, then the honest error
+    expect(session.error).toContain('expired')
+  })
+
+  it('a non-transient failure does NOT respawn', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'enroll-hard-'))
+    const stub = join(dir, 'stub-node.sh')
+    await writeFile(stub, `#!/bin/sh
+echo "FATAL something genuinely broken"
+exit 1
+`, { mode: 0o755 })
+    await chmod(stub, 0o755)
+    const { EnrollmentSession } = await import('../src/node/manager.js')
+    const session = new EnrollmentSession(stub, [], 'https://hub.sam-mesh.dev')
+    await session.done
+    expect(session.state).toBe('failed')
+    expect(session.attempts).toBe(1)
+  })
+})

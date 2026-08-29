@@ -94,6 +94,12 @@ async function socketAnswers(path: string, timeoutMs = 1_500): Promise<boolean> 
 }
 
 /** One join attempt: owns the child process and surfaces the device-flow URL/code. */
+/** Post-enroll failures that are TRANSIENT by construction: the hub's
+ * post-enroll sync is flaky (this week's evidence: same flow, third attempt
+ * succeeds) and device codes expire while the user finds their phone. The
+ * correct response is a fresh code, not a human with a log file. */
+const TRANSIENT_JOIN_FAILURE = /no valid key found for verification|control plane URL not found|failed to connect and authenticate with any router after HTTP enrollment|device authorization expired|invalid device code/i
+
 export class EnrollmentSession {
   readonly sessionId = randomUUID()
   state: EnrollmentState = 'starting'
@@ -101,11 +107,21 @@ export class EnrollmentSession {
   userCode: string | null = null
   error: string | null = null
   private buffer = ''
-  private readonly child: ReturnType<typeof spawn>
+  private child: ReturnType<typeof spawn>
   readonly done: Promise<void>
+  /** Join attempts so far (1 = first try; >1 means the session self-retried a transient failure). */
+  attempts = 0
+  private static readonly MAX_ATTEMPTS = 3
+  private resolveDone!: () => void
 
-  constructor(binary: string, args: string[], readonly controlPlane: string, readonly mode: 'device' | 'bootstrap' = 'device', private readonly onSettle: () => Promise<void> | void = () => {}) {
-    this.child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  constructor(private readonly binary: string, private readonly args: string[], readonly controlPlane: string, readonly mode: 'device' | 'bootstrap' = 'device', private readonly onSettle: () => Promise<void> | void = () => {}) {
+    this.child = this.spawnChild()
+    this.done = new Promise((resolve) => { this.resolveDone = resolve })
+  }
+
+  private spawnChild(): ReturnType<typeof spawn> {
+    this.attempts += 1
+    const child = spawn(this.binary, this.args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const onData = (chunk: Buffer) => {
       this.buffer += chunk.toString()
       const parsed = parseDeviceFlow(this.buffer)
@@ -115,21 +131,32 @@ export class EnrollmentSession {
         this.state = 'awaiting_user'
       }
     }
-    this.child.stdout?.on('data', onData)
-    this.child.stderr?.on('data', onData)
-    this.done = new Promise((resolve) => {
-      this.child.once('exit', (code) => {
-        if (this.state === 'cancelled') { /* keep */ }
-        else if (code === 0) this.state = 'complete'
-        else {
-          this.state = 'failed'
-          this.error = this.buffer.trim().split('\n').slice(-3).join(' ').slice(0, 400) || `join exited with code ${code}`
+    child.stdout?.on('data', onData)
+    child.stderr?.on('data', onData)
+    child.once('exit', (code) => {
+      if (this.state === 'cancelled') { void Promise.resolve(this.onSettle()).then(() => this.resolveDone(), () => this.resolveDone()); return }
+      if (code === 0) {
+        this.state = 'complete'
+      } else {
+        const tail = this.buffer.trim()
+        // A3: transient post-enroll failures and expired codes respawn the
+        // child IN-PLACE (same sessionId; a fresh URL/code replaces the old).
+        if (TRANSIENT_JOIN_FAILURE.test(tail) && this.attempts < EnrollmentSession.MAX_ATTEMPTS) {
+          this.buffer = ''
+          this.state = 'starting'
+          this.verificationUrl = null
+          this.userCode = null
+          this.child = this.spawnChild()
+          return
         }
-        // Cleanup (credential-file scrub) is part of settling: `done` resolves
-        // only after it, so observers never race the residue.
-        void Promise.resolve(this.onSettle()).then(() => resolve(), () => resolve())
-      })
+        this.state = 'failed'
+        this.error = tail.split('\n').slice(-3).join(' ').slice(0, 400) || `join exited with code ${code}`
+      }
+      // Cleanup (credential-file scrub) is part of settling: `done` resolves
+      // only after it, so observers never race the residue.
+      void Promise.resolve(this.onSettle()).then(() => this.resolveDone(), () => this.resolveDone())
     })
+    return child
   }
 
   cancel(): void {
