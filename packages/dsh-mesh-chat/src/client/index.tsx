@@ -131,13 +131,25 @@ function ChatSection({ api, steer }: { api: ChatApi; steer?: SteerFace | undefin
     try { const r = await fn(); setNote(r.ok ? (r.message ?? "sent") : (r.error ?? "failed")) } catch (e) { setNote(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
 
-  const messages = tab === "fleet" ? snapshot.fleet.messages : snapshot.inbox.messages
+  const [showSystem, setShowSystem] = useState(true)
+  const lastSeen = useRef<{ fleet: number; dm: number }>({ fleet: 0, dm: 0 })
+  // Unread = messages past the cursor of the OTHER tab since you last looked.
+  const fleetMsgs = snapshot.fleet.messages
+  const dmMsgs = snapshot.inbox.messages
+  const fleetUnread = tab !== "fleet" ? fleetMsgs.filter(m => m.id > lastSeen.current.fleet).length : 0
+  const dmUnread = tab !== "dm" ? dmMsgs.filter(m => m.id > lastSeen.current.dm).length : 0
+  useEffect(() => {
+    if (tab === "fleet" && fleetMsgs.length > 0) lastSeen.current.fleet = fleetMsgs[fleetMsgs.length - 1]!.id
+    if (tab === "dm" && dmMsgs.length > 0) lastSeen.current.dm = dmMsgs[dmMsgs.length - 1]!.id
+  }, [tab, fleetMsgs.length, dmMsgs.length])
+  const messages = (tab === "fleet" ? fleetMsgs : dmMsgs).filter(m => showSystem || m.kind !== "system")
   return <section style={box} data-testid="mesh-chat">
     <strong>Mesh chat</strong>
     {steer && <SteerDock steer={steer} />}
     <div>
-      <button style={{ ...button, fontWeight: tab === "fleet" ? 700 : 400 }} onClick={() => setTab("fleet")}>Fleet channel</button>{" "}
-      <button style={{ ...button, fontWeight: tab === "dm" ? 700 : 400 }} onClick={() => setTab("dm")}>Direct</button>
+      <button style={{ ...button, fontWeight: tab === "fleet" ? 700 : 400 }} onClick={() => setTab("fleet")}>Fleet channel{fleetUnread > 0 ? ` (${fleetUnread})` : ""}</button>{" "}
+      <button style={{ ...button, fontWeight: tab === "dm" ? 700 : 400 }} onClick={() => setTab("dm")}>Direct{dmUnread > 0 ? ` (${dmUnread})` : ""}</button>{" "}
+      <button style={{ ...button, opacity: showSystem ? 1 : 0.5 }} title="show/hide system events" onClick={() => setShowSystem(v => !v)}>⚙</button>
     </div>
     {tab === "fleet" && !snapshot.fleet.available && <p role="alert" style={{ margin: 0, opacity: 0.8 }}>{snapshot.fleet.error ?? "fleet channel unavailable"}</p>}
     <div style={list}>{messages.map(m => <MessageRow key={`${m.id}-${m.ts}`} message={m} />)}{messages.length === 0 && <small style={{ opacity: 0.6 }}>no messages yet</small>}</div>

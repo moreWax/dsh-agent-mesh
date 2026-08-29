@@ -6,6 +6,7 @@ import { generatePairKeys, open } from "@morewax/sam-mesh"
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { existsSync } from "node:fs"
 export interface ServeStatusView { configured: boolean; target: string; port: number; announceName: string; modelAllowlist: string[]; runtimeModel: string; running: boolean; models: string[]; rowState?: string | undefined; rowDetail?: string | undefined; backends: Array<{ name: string; url: string; present: boolean }> }
 export interface ServeConfigureRequest { enabled: boolean; target?: string; announceName?: string; modelAllowlist?: string[]; runtimeModel?: string; runtimeAlias?: string }
 export interface RuntimeStatusView { available: boolean; tag?: string; error?: string; models: Array<{ file: string; bytes: number }> }
@@ -187,6 +188,10 @@ export class AgentMeshWebHost extends TypertRemoteService {
   @Remote("fleetDiscover") async fleetDiscover(): Promise<{
     fleets: { name: string; providers: number; peerIds: string[] }[]
     node: { running: boolean; enrolled: boolean; enrolledHub: string | null }
+    /** C1: the trust watcher escalated an unhealable identity — the card shows a persistent re-approval banner. */
+    needsReenroll: boolean
+    /** C3: fleet membership posture, probed live (valid capability / stale / unpaired). */
+    membership: { state: "valid" | "stale" | "unpaired"; detail?: string }
   }> {
     const services = await this.mesh.core.discoverRemoteServices({ type: "mcp" })
     const byName = new Map<string, string[]>()
@@ -195,9 +200,31 @@ export class AgentMeshWebHost extends TypertRemoteService {
       byName.set(s.srv_name, [...(byName.get(s.srv_name) ?? []), s.peer_id])
     }
     const status = await this.nodes.status()
+    // C1: the A1 watcher's escalation marker.
+    const needsReenroll = existsSync(join(homedir(), ".config", "sam-mesh", "needs-reenroll.txt"))
+    // C3: membership validity, probed with a 4s bound — a stale capability must
+    // surface HERE, not as a mysterious denial stream in the fleet channel.
+    let membership: { state: "valid" | "stale" | "unpaired"; detail?: string }
+    const capability = await this.mesh.resolveCallCapability?.()
+    if (!capability) membership = { state: "unpaired", detail: "no fleet capability on this machine — join a fleet" }
+    else {
+      const fleet = services.find(s => typeof s.srv_name === "string" && s.srv_name.endsWith("task-service") && s.peer_id)
+      if (!fleet?.peer_id) membership = { state: "stale", detail: "capability stored but no fleet service visible to probe" }
+      else {
+        try {
+          await this.mesh.core.callRemoteTool({ peer_id: fleet.peer_id, tool_name: `mcp://${fleet.srv_name}/chat_fetch`, arguments: { limit: 1, _capability: capability } }, AbortSignal.timeout(4_000))
+          membership = { state: "valid", detail: "capability verified against the fleet" }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          membership = { state: "stale", detail: /capability/i.test(message) ? "capability rejected — re-provision (Join a fleet with a fresh invite code)" : `probe failed: ${message}` }
+        }
+      }
+    }
     return {
       fleets: [...byName.entries()].map(([name, peerIds]) => ({ name, providers: peerIds.length, peerIds })),
       node: { running: status.running, enrolled: status.enrolled, enrolledHub: status.enrolledHub },
+      needsReenroll,
+      membership,
     }
   }
 
