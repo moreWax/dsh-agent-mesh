@@ -14,6 +14,8 @@ export interface ChatMessageView { id: number; kind: 'user' | 'system'; sender: 
 export interface ChatSnapshot {
   fleet: { available: boolean; cursor: number; messages: ChatMessageView[]; error?: string }
   inbox: { serviceName: string; messages: ChatMessageView[] }
+  /** DM-reachable peers (discovered dsh-chat-inbox services) — the card renders a picker, never a free-text peer id. */
+  peers: Array<{ peerId: string; name: string }>
 }
 
 /** Structural agentMesh face — the seam to @morewax/dsh-agent-mesh without importing it. */
@@ -49,6 +51,15 @@ export class MeshChatWebHost extends TypertRemoteService {
 
   private get mesh(): AgentMeshFace { return (this.ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh }
 
+  /** Peers running a DM inbox (the picker source). */
+  private async inboxPeers(): Promise<Array<{ peerId: string; name: string }>> {
+    const name = this.options.inboxServiceName ?? 'dsh-chat-inbox'
+    const services = await this.mesh.core.discoverRemoteServices({ type: 'mcp', name }).catch(() => [])
+    return services
+      .filter(s => s.srv_name === name && s.peer_id)
+      .map(s => ({ peerId: s.peer_id!, name: `${s.peer_id!.slice(0, 14)}…` }))
+  }
+
   /** Fleet server candidates: exact name first, then suffix matches —
    *  operator-chosen prefixes ('morewax-dsh-task-service' vs the default).
    *  NOTE: paired members also register their OWN task service under the
@@ -78,7 +89,7 @@ export class MeshChatWebHost extends TypertRemoteService {
       fleet.messages = messages
       fleet.cursor = messages.length > 0 ? messages[messages.length - 1]!.id : afterId
       const inbox = { serviceName: this.options.inboxServiceName ?? 'dsh-chat-inbox', messages: this.options.store.fetch('inbox', 0, 50).slice(-50) as ChatMessageView[] }
-      return { fleet, inbox }
+      return { fleet, inbox, peers: await this.inboxPeers() }
     }
     const candidates = await this.fleetCandidates()
     if (candidates.length === 0) fleet.error = `no '${this.options.fleetServiceName ?? 'dsh-task-service'}' fleet service visible in the swarm`
@@ -107,7 +118,7 @@ export class MeshChatWebHost extends TypertRemoteService {
       if (!fleet.available) fleet.error = lastError || 'fleet channel unavailable (no member capability?)'
     }
     const inbox = { serviceName: this.options.inboxServiceName ?? 'dsh-chat-inbox', messages: this.options.store.fetch('inbox', 0, 50).slice(-50) as ChatMessageView[] }
-    return { fleet, inbox }
+    return { fleet, inbox, peers: await this.inboxPeers() }
   }
 
   /** Send to the fleet channel (member-gated). */

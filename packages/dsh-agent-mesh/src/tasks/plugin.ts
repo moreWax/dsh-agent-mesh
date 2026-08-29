@@ -35,6 +35,8 @@ class AuditCoalescer {
   }
 }
 const auditCoalescer = new AuditCoalescer()
+/** Routine allowed-calls that must NOT echo into the fleet channel (denials of these still post). */
+const ROUTINE_AUDIT_TOOLS = new Set(['chat_fetch', 'chat_send', 'task_get', 'task_watch', 'task_collect', 'task_list'])
 
 export const name='agent-mesh-task-service'
 export const inject=['agentMesh','credentials']
@@ -132,6 +134,10 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
       // not drown the conversation.
       const chat = (ctx as Context & { get?(name: string): unknown }).get?.('agentMeshChat') as { postSystem?(text: string, meta?: unknown): void } | undefined
       if (chat?.postSystem) {
+        // Feed-worthy events only: routine reads/echoes (chat_fetch/send,
+        // task polling) are noise — the channel is for MEANINGFUL fleet
+        // activity (pairing, members, exec, steering) and every denial.
+        if (event.allowed && ROUTINE_AUDIT_TOOLS.has(event.tool)) return
         const key = `${event.tool}|${event.allowed}|${event.member ?? ''}`
         auditCoalescer.add(key, (count) => {
           const base = `${event.tool} ${event.allowed ? 'allowed' : 'DENIED'}${event.member ? ` — ${event.member}` : ''}`

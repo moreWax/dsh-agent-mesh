@@ -16,6 +16,7 @@ const chatMessage = z.object({ id: z.number(), kind: z.union([z.literal("user"),
 const chatSnapshot = z.object({
   fleet: z.object({ available: z.boolean(), cursor: z.number(), messages: z.array(chatMessage), error: z.string().optional() }),
   inbox: z.object({ serviceName: z.string(), messages: z.array(chatMessage) }),
+  peers: z.array(z.object({ peerId: z.string(), name: z.string() })),
 })
 const actionResult = z.union([z.object({ ok: z.literal(true), message: z.string().optional() }), z.object({ ok: z.literal(false), error: z.string() })])
 export const TYPERT_REMOTE: TypertRemoteContribution = { package: "@morewax/dsh-mesh-chat", descriptors: [

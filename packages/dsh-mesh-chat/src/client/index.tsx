@@ -14,7 +14,7 @@ import React, { useEffect, useRef, useState } from "react"
 import { TYPERT_REMOTE } from "../remote.js"
 
 type ChatMessage = { id: number; kind: "user" | "system"; sender: string; text: string; ts: number; meta?: unknown }
-type Snapshot = { fleet: { available: boolean; cursor: number; messages: ChatMessage[]; error?: string }; inbox: { serviceName: string; messages: ChatMessage[] } }
+type Snapshot = { fleet: { available: boolean; cursor: number; messages: ChatMessage[]; error?: string }; inbox: { serviceName: string; messages: ChatMessage[] }; peers: Array<{ peerId: string; name: string }> }
 type ActionResult = { ok: boolean; message?: string; error?: string }
 
 const box: React.CSSProperties = { border: "1px solid var(--border,#444)", borderRadius: 8, padding: 10, display: "grid", gap: 8 }
@@ -77,7 +77,7 @@ function SteerDock({ steer }: { steer: SteerFace }) {
 
 /** Process-local bridge: the plugin mount subscribes to the host event once;
  * the live section's poll hooks in (and out) on mount/unmount. */
-const refreshHandle: { subscribe: (() => void) | null } = { subscribe: null }
+const refreshHandle: { subscribe: (() => void) | null; poke: (() => void) | null } = { subscribe: null, poke: null }
 
 function ChatSection({ api, steer }: { api: ChatApi; steer?: SteerFace | undefined }) {
   const [snapshot, setSnapshot] = useState<Snapshot>()
@@ -105,12 +105,20 @@ function ChatSection({ api, steer }: { api: ChatApi; steer?: SteerFace | undefin
       }
     }
     void poll()
-    // Slow fallback; the live path is the mesh-chat/updated host event
-    // (subscribed by the plugin mount below) → refresh within ~2s of arrival.
-    const t = setInterval(() => void poll(), 15_000)
-    const onEvent = (): void => { void poll() }
+    // Adaptive: 15s idle, 1.5s for a short window after ANY local action
+    // (send/DM) or when a fleet notification hints freshness. The forwarded-
+    // events allowlist is upstream-owned, so our own namespace is the channel.
+    let interval = 15_000
+    let t = setInterval(() => void poll(), interval)
+    refreshHandle.poke = () => {
+      clearInterval(t)
+      interval = 1_500
+      void poll()
+      setTimeout(() => { interval = 15_000; clearInterval(t); t = setInterval(() => void poll(), interval) }, 10_000)
+    }
+    const onEvent = (): void => { refreshHandle.poke?.() }
     refreshHandle.subscribe = onEvent
-    return () => { live = false; clearInterval(t); refreshHandle.subscribe = null }
+    return () => { live = false; clearInterval(t); refreshHandle.subscribe = null; refreshHandle.poke = null }
   }, [api])
 
   if (!snapshot) return <section style={box}><strong>Mesh chat</strong>{loadError
@@ -135,14 +143,18 @@ function ChatSection({ api, steer }: { api: ChatApi; steer?: SteerFace | undefin
     <div style={list}>{messages.map(m => <MessageRow key={`${m.id}-${m.ts}`} message={m} />)}{messages.length === 0 && <small style={{ opacity: 0.6 }}>no messages yet</small>}</div>
     {tab === "fleet" && <div style={{ display: "flex", gap: 6 }}>
       <input style={{ ...input, flex: 1 }} placeholder="message the fleet…" value={text} onChange={e => setText(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter" && text.trim()) void send(async () => { const r = await api.chatSend(text); if (r.ok) setText(""); return r }) }} />
-      <button style={button} disabled={busy || !text.trim()} onClick={() => void send(async () => { const r = await api.chatSend(text); if (r.ok) setText(""); return r })}>Send</button>
+        onKeyDown={e => { if (e.key === "Enter" && text.trim()) void send(async () => { const r = await api.chatSend(text); if (r.ok) { setText(""); refreshHandle.poke?.() } return r }) }} />
+      <button style={button} disabled={busy || !text.trim()} onClick={() => void send(async () => { const r = await api.chatSend(text); if (r.ok) { setText(""); refreshHandle.poke?.() } return r })}>Send</button>
     </div>}
     {tab === "dm" && <div style={{ display: "grid", gap: 6 }}>
-      <input style={input} placeholder="peer id (12D3Koo…)" value={peer} onChange={e => setPeer(e.target.value.trim())} />
+      <select style={input} value={peer} onChange={e => setPeer(e.target.value)}>
+        <option value="">choose a peer…</option>
+        {(snapshot.peers ?? []).map(p => <option key={p.peerId} value={p.peerId}>{p.name}</option>)}
+      </select>
+      {(snapshot.peers ?? []).length === 0 && <small style={{ opacity: 0.7 }}>No peer inboxes discovered — DMs need the peer online with dsh-mesh-chat installed.</small>}
       <div style={{ display: "flex", gap: 6 }}>
         <input style={{ ...input, flex: 1 }} placeholder="direct message…" value={text} onChange={e => setText(e.target.value)} />
-        <button style={button} disabled={busy || !text.trim() || !peer} onClick={() => void send(async () => { const r = await api.dmSend(peer, text); if (r.ok) setText(""); return r })}>Send DM</button>
+        <button style={button} disabled={busy || !text.trim() || !peer} onClick={() => void send(async () => { const r = await api.dmSend(peer, text); if (r.ok) { setText(""); refreshHandle.poke?.() } return r })}>Send DM</button>
       </div>
       <small style={{ opacity: 0.6 }}>DMs ride the authenticated mesh transport; the peer&apos;s inbox is rate-limited.</small>
     </div>}
