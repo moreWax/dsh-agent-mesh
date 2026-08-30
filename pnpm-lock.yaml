@@ -109,6 +109,34 @@ importers:
         specifier: ^2.8.0
         version: 2.9.0
 
+  packages/dsh-imessage:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: 3.18.1
+        version: 3.18.1
+      '@morewax/sam-mesh':
+        specifier: workspace:*
+        version: link:../sam-mesh
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: '*'
+        version: 4.0.1
+      '@types/node':
+        specifier: '*'
+        version: 24.13.3
+      tsdown:
+        specifier: '*'
+        version: 0.22.14(typescript@5.9.3)
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+      vitest:
+        specifier: '*'
+        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)
+
   packages/dsh-integration:
     devDependencies:
       '@morewax/dsh-agent-mesh':

@@ -1,0 +1,33 @@
+{
+  "name": "@morewax/dsh-imessage",
+  "version": "0.1.0",
+  "description": "iMessage for the fleet \u2014 send/read/search iMessage from dsh agents and any fleet member, with allowlist access control and inbound delivery into the mesh",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsdown --watch"
+  },
+  "dependencies": {
+    "@morewax/sam-mesh": "workspace:*",
+    "@deepseek-ai/schemastery": "3.18.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "tsdown": "*",
+    "typescript": "*",
+    "vitest": "*",
+    "@types/node": "*"
+  }
+}

@@ -1,0 +1,10 @@
+# @morewax/dsh-imessage — iMessage for the fleet (macOS only).
+- insert:
+    - id: dsh-imessage
+      name: '@morewax/dsh-imessage'
+      config:
+        dbPath: ~/Library/Messages/chat.db
+        stateDir: ~/.config/dsh-imessage
+        allowSms: false
+        watchMs: 2000
+        fleetTools: true
