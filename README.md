@@ -4,8 +4,14 @@ SAM-native capability mesh for DeepSeek Harness — a pnpm workspace with two pa
 
 | Package | Role | Runs on |
 | --- | --- | --- |
-| [`@morewax/sam-mesh`](packages/sam-mesh) | **Client + node kit.** Talks to a local `sam-node` (no dsh required) and manages its lifecycle — install check, daemon start/stop, OIDC device-flow enrollment. Zero runtime dependencies. | Any enrolled machine — laptop, jump host, server |
-| [`@morewax/dsh-agent-mesh`](packages/dsh-agent-mesh) | **dsh plugin.** Consumes mesh tools/models/tasks into the harness, publishes dsh's durable task service onto the mesh, and exposes node management (including browser-based enrollment) in the Web UI settings. | Inside a dsh host |
+| [`@morewax/sam-mesh`](packages/sam-mesh) | **Client + node kit.** Talks to a local `sam-node` (no dsh required) and manages its lifecycle — install check, daemon start/stop, OIDC device-flow enrollment with automatic transient-retry, and a **runtime trust watcher** that self-heals hub key rotations. Zero runtime dependencies. | Any enrolled machine — laptop, jump host, server |
+| [`@morewax/dsh-agent-mesh`](packages/dsh-agent-mesh) | **dsh plugin.** Consumes mesh tools/models/tasks into the harness, publishes dsh's durable task service onto the mesh, and exposes node management, fleet administration, model serving + **live steering**, and an operator **diagnostics console** in the Web UI. | Inside a dsh host |
+| [`@morewax/dsh-mesh-chat`](packages/dsh-mesh-chat) | **dsh plugin.** Authenticated chat over the mesh: a capability-gated **fleet channel** (with fleet system events) and **direct messages** between nodes, plus sealed per-member notifications over the mesh's pubsub. | Inside a dsh host |
+
+`packages/dsh-integration` is private (the cross-package wire-level test
+harness; never published). `@morewax/sam-node-<os>-<arch>` and
+`@morewax/llama-cpp-<os>-<arch>` carry the vendored binaries as optional
+dependencies (you download only your platform).
 
 The split follows the trust boundary: `sam-mesh` never imports dsh; the plugin
 depends on it via the workspace. Both share sam-node's wire contract and
@@ -72,10 +78,22 @@ see [docs/join-the-fleet.md](docs/join-the-fleet.md).
   automatically — peers are pure dial-out, no open ports, no VPN.
 - **Discovery is public, execution is not.** Announcing a service on the
   public hub publishes a phone-book entry (service name + peer id). Calling
-  a gated tool requires the fleet **capability** — a shared secret held only
-  by fleet members, injected per call, compared in constant time, stripped
-  before tool schemas see the arguments. Missing and wrong credentials get
-  the same refusal.
+  a gated tool requires a fleet **capability** — injected per call, compared
+  in constant time, stripped before tool schemas see the arguments. Missing
+  and wrong credentials get the same refusal.
+- **Per-member capabilities, not one shared key.** Pairing (or a one-time
+  **invite code**) mints a unique capability per approved member with
+  explicit scopes (`tasks`, `inference`; `admin` is never granted through
+  pairing). The shared secret stays on the operator as the *operator
+  credential*. **Revocation is registry deletion** — effective on the next
+  gated call at the task service and every inference gate — and every gated
+  call is attributed to a member in the audit stream (and, where the mesh
+  transport exposes it, the calling peer).
+- **Fleet administration from anywhere.** Pairing approvals, member lists,
+  revocations, invite-code generation, model steering, and bounded
+  diagnostics (`peer_exec`) are all operator tools on the fleet server —
+  reachable from **any** machine holding the operator credential, through
+  the mesh, never around it.
 - **Fail closed**: a configured-but-unresolvable capability ref gates the
   service behind an ephemeral per-boot secret — every mesh call rejects —
   and logs loudly. In-process callers bypass the gate (same trust domain).
@@ -84,6 +102,37 @@ see [docs/join-the-fleet.md](docs/join-the-fleet.md).
   *approval* is what gates access, and approval is always an explicit human
   action (card button or CLI), consistent with skill installs and service
   registration.
+
+## Mesh chat — a channel between your machines
+
+`@morewax/dsh-mesh-chat` adds authenticated chat: a **fleet channel** where
+members talk and *fleet events narrate themselves* (pairings, approvals,
+revocations, gate denials as system messages), and **direct messages** —
+every node runs a rate-limited inbox, and a DM is an authenticated mesh
+call to a peer's inbox. Freshness rides the mesh's own pubsub: messages are
+fanned out **sealed per member** (each member's key is derived from their
+capability, so revocation kills delivery with zero push), while history
+stays durable in SQLite on the fleet server. The card section is Settings →
+Mesh chat.
+
+## Live model steering
+
+Serve rows accept live steering — a system prompt and sampling defaults
+applied by the gate on the *next* request (`inference_steer`, operator
+gated). Tune a served model mid-conversation from the Model steering window
+in the Agent Mesh card, the ⚙ steer strip in the Mesh chat card, or the
+composer dock on any conversation page.
+
+## Operator surfaces
+
+`fleet_invite_create` mints one-time codes (15 min, single-use — possession
+is the approval; a wrong code degrades to the approval queue, never a
+lockout). `peer_exec` runs bounded shell commands on member machines over
+the mesh — gated by the *member's* capability, which only the member and
+the operator hold — and the Fleet administration card exposes it as a
+diagnostics console. A **runtime trust watcher** heals hub key rotations
+silently (and `sam-mesh doctor` flags signature trust and refresh-token
+health before they bite).
 
 ## The sam-node binary is included
 
