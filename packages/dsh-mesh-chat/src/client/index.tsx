@@ -121,6 +121,19 @@ function ChatSection({ api, steer }: { api: ChatApi; steer?: SteerFace | undefin
     return () => { live = false; clearInterval(t); refreshHandle.subscribe = null; refreshHandle.poke = null }
   }, [api])
 
+  // C2 hooks — ALL hooks must live above every early return (React #310: a
+  // first render with fewer hooks than later renders crashes the slot).
+  const [showSystem, setShowSystem] = useState(true)
+  const lastSeen = useRef<{ fleet: number; dm: number }>({ fleet: 0, dm: 0 })
+  const fleetMsgs = snapshot?.fleet.messages ?? []
+  const dmMsgs = snapshot?.inbox.messages ?? []
+  const fleetUnread = tab !== "fleet" ? fleetMsgs.filter(m => m.id > lastSeen.current.fleet).length : 0
+  const dmUnread = tab !== "dm" ? dmMsgs.filter(m => m.id > lastSeen.current.dm).length : 0
+  useEffect(() => {
+    if (tab === "fleet" && fleetMsgs.length > 0) lastSeen.current.fleet = fleetMsgs[fleetMsgs.length - 1]!.id
+    if (tab === "dm" && dmMsgs.length > 0) lastSeen.current.dm = dmMsgs[dmMsgs.length - 1]!.id
+  }, [tab, fleetMsgs.length, dmMsgs.length])
+
   if (!snapshot) return <section style={box}><strong>Mesh chat</strong>{loadError
     ? <p role="alert" style={{ margin: 0 }}>chat service unreachable: {loadError}</p>
     : <small>loading…</small>}</section>
@@ -131,17 +144,6 @@ function ChatSection({ api, steer }: { api: ChatApi; steer?: SteerFace | undefin
     try { const r = await fn(); setNote(r.ok ? (r.message ?? "sent") : (r.error ?? "failed")) } catch (e) { setNote(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
 
-  const [showSystem, setShowSystem] = useState(true)
-  const lastSeen = useRef<{ fleet: number; dm: number }>({ fleet: 0, dm: 0 })
-  // Unread = messages past the cursor of the OTHER tab since you last looked.
-  const fleetMsgs = snapshot.fleet.messages
-  const dmMsgs = snapshot.inbox.messages
-  const fleetUnread = tab !== "fleet" ? fleetMsgs.filter(m => m.id > lastSeen.current.fleet).length : 0
-  const dmUnread = tab !== "dm" ? dmMsgs.filter(m => m.id > lastSeen.current.dm).length : 0
-  useEffect(() => {
-    if (tab === "fleet" && fleetMsgs.length > 0) lastSeen.current.fleet = fleetMsgs[fleetMsgs.length - 1]!.id
-    if (tab === "dm" && dmMsgs.length > 0) lastSeen.current.dm = dmMsgs[dmMsgs.length - 1]!.id
-  }, [tab, fleetMsgs.length, dmMsgs.length])
   const messages = (tab === "fleet" ? fleetMsgs : dmMsgs).filter(m => showSystem || m.kind !== "system")
   return <section style={box} data-testid="mesh-chat">
     <strong>Mesh chat</strong>
