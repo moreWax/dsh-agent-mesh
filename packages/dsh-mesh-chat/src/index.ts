@@ -135,6 +135,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           serviceName: resolvedFleet,
           publisher,
           bus: meshCore,
+          onHealth: (healthy, rejectionCount) => { healthState = { hubConsistent: healthy, rejectionCount, ts: Date.now() } },
           onTransition: (healthy, rejectionCount) => {
             const note = healthy ? 'hub trust recovered — mesh signatures verify again' : `hub trust degraded — ${rejectionCount} peers reject our identity (rotation missed or hub inconsistent)`
             const message = store.append('fleet', { kind: 'system', sender: 'system', text: note })
@@ -173,11 +174,14 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         log: line => console.info(`[mesh-chat] ${line}`),
         onMessage: message => {
           const health = healthOf(message as unknown as { channel?: string; sender?: string; text?: string })
-          if (health) healthState = { hubConsistent: health.hubConsistent, rejectionCount: health.rejectionCount, ts: health.ts }
+          if (health) {
+            healthState = { hubConsistent: health.hubConsistent, rejectionCount: health.rejectionCount, ts: health.ts }
+            console.info(`[mesh-chat] health beacon received: hubConsistent=${health.hubConsistent} rejections=${health.rejectionCount}`)
+          }
           emitUpdated()
         },
       })
-      await subscriber.start([healthTopic(resolvedFleet)]).catch(error => ctx.logger.warn(`[mesh-chat] subscribe failed: ${error instanceof Error ? error.message : String(error)}`))
+      await subscriber.start([healthTopic(resolvedFleet)]).then(() => console.info('[mesh-chat] subscriber live (chat + health topics)')).catch(error => console.info(`[mesh-chat] subscribe failed: ${error instanceof Error ? error.message : String(error)}`))
     })()
   }
 

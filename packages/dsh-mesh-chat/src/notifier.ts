@@ -122,13 +122,16 @@ export class FleetSubscriber {
         let envelope: NotifyEnvelope
         try { envelope = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) } catch { continue }
         if (envelope?.kind !== 'dsh-chat-event') continue
+        let opened = false
         for (const sealed of Object.values(envelope.sealed ?? {})) {
           try {
             const message = JSON.parse(open(sealed, this.keys.privateKey)) as ChatMessage
             this.options.onMessage(message)
+            opened = true
             break // exactly one slot is ours
           } catch { /* not our slot */ }
         }
+        if (!opened) this.options.log?.(`envelope on ${topic}: no slot opened for us (${Object.keys(envelope.sealed ?? {}).length} slot(s))`)
       }
     } catch (error) { this.options.log?.(`notify poll failed: ${error instanceof Error ? error.message : String(error)}`) }
   }

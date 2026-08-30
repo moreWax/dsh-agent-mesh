@@ -49,6 +49,10 @@ export interface HealthBeaconOptions {
   heartbeatMs?: number
   probeMs?: number
   onTransition?: (healthy: boolean, rejectionCount: number) => void
+  /** Every probe, for the operator's OWN view (the node does not loop
+   *  self-published gossip back into local subscriptions — the operator's
+   *  health dot must come from the probe, not the broadcast). */
+  onHealth?: (healthy: boolean, rejectionCount: number) => void
   log?: (line: string) => void
 }
 
@@ -75,6 +79,7 @@ export function startHealthBeacon(options: HealthBeaconOptions): () => void {
   const tick = async (): Promise<void> => {
     try {
       const { hubConsistent, rejectionCount } = await probeTrust(options.dataDir)
+      options.onHealth?.(hubConsistent, rejectionCount)
       if (lastHealthy === undefined) {
         lastHealthy = hubConsistent
         await emit(hubConsistent, rejectionCount) // initial state = members learn it on boot
