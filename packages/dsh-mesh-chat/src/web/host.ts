@@ -5,6 +5,7 @@
  * directly — it lives in this process.
  */
 import { randomBytes } from 'node:crypto'
+import { toolPayload, type AgentMeshFace } from '@morewax/sam-mesh'
 import { homedir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -18,23 +19,7 @@ export interface ChatSnapshot {
   peers: Array<{ peerId: string; name: string }>
 }
 
-/** Structural agentMesh face — the seam to @morewax/dsh-agent-mesh without importing it. */
-interface AgentMeshFace {
-  core: {
-    callRemoteTool(input: { peer_id: string; tool_name: string; arguments: Record<string, unknown> }, signal?: AbortSignal): Promise<unknown>
-    discoverRemoteServices(input: { type: string; name?: string }): Promise<Array<{ srv_name: string; peer_id?: string }>>
-  }
-  resolveCallCapability?: () => Promise<string | undefined>
-}
 
-function toolPayload<T extends Record<string, unknown>>(result: unknown): T {
-  if (typeof result === 'object' && result !== null) {
-    const structured = (result as { structuredContent?: unknown }).structuredContent
-    if (structured && typeof structured === 'object') return structured as T
-    return result as T
-  }
-  return {} as T
-}
 
 export class MeshChatWebHost extends TypertRemoteService {
   constructor(
@@ -68,11 +53,11 @@ export class MeshChatWebHost extends TypertRemoteService {
    *  the real fleet server is the one whose chat tools actually answer. */
   private async fleetCandidates(serviceName?: string): Promise<Array<{ peerId: string; service: string }>> {
     const name = serviceName ?? this.options.fleetServiceName ?? 'dsh-task-service'
-    const all = await this.mesh.core.discoverRemoteServices({ type: 'mcp' }).catch((error: unknown) => { console.info(`[mesh-chat] fleet discovery failed: ${error instanceof Error ? error.message : String(error)}`); return [] })
+    const all = await this.mesh.core.discoverRemoteServices({ type: 'mcp' } as Parameters<AgentMeshFace['core']['discoverRemoteServices']>[0]).catch((error: unknown) => { console.info(`[mesh-chat] fleet discovery failed: ${error instanceof Error ? error.message : String(error)}`); return [] as Awaited<ReturnType<AgentMeshFace['core']['discoverRemoteServices']>> })
     console.info(`[mesh-chat] fleet discovery: ${all.length} service(s): ${all.map(s => s.srv_name).join(', ') || '(none)'}`)
     const exact = all.filter(s => s.srv_name === name && s.peer_id)
     const fuzzy = all.filter(s => typeof s.srv_name === 'string' && s.srv_name.endsWith('task-service') && s.peer_id && !exact.includes(s))
-    return [...exact, ...fuzzy].map(s => ({ peerId: s.peer_id!, service: s.srv_name }))
+    return [...exact, ...fuzzy].map(s => ({ peerId: s.peer_id!, service: s.srv_name as string }))
   }
 
   /** Snapshot both channels. afterId = last-seen fleet cursor (0 = tail-fetch the recent window). */

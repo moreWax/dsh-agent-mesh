@@ -11,6 +11,7 @@ import { withPairing, InviteCodes } from './pairing.js'
 import { MemberAuthorizer, ToolAllowlistAuthorizer, type Authorizer } from './authz.js'
 import { FleetMemberRegistry, defaultMembersPath, type FleetScope } from './members.js'
 import { withMemberTools } from './member-tools.js'
+import { packageVersionOf } from '@morewax/sam-mesh'
 import { peerExecTools } from './exec.js'
 import { reconcileServiceName } from './service-name.js'
 import { TaskHttpServer } from './http.js'
@@ -149,7 +150,7 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
   }); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<Client['register']>>|undefined
   let stopReannounce:(()=>void)|undefined
-  const PLUGIN_VERSION='0.1.0'
+  const PLUGIN_VERSION=await packageVersionOf(new URL('../../package.json', import.meta.url))
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)
   let retryTimer:ReturnType<typeof setInterval>|undefined
   if(config.registerWithSam!==false){

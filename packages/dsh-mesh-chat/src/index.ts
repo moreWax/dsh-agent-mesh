@@ -15,7 +15,7 @@
 import { homedir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { SamServiceRegistrationClient } from '@morewax/sam-mesh'
+import { SamServiceRegistrationClient, packageVersionOf, type AgentMeshFace } from '@morewax/sam-mesh'
 import { SQLiteChatStore } from './store.js'
 import { createInboxServer } from './inbox.js'
 import { registerFleetChatTools, type ToolMountService } from './fleet-channel.js'
@@ -23,7 +23,7 @@ import { FleetPublisher, FleetSubscriber, chatTopic } from './notifier.js'
 import { MeshChatWebHost } from './web/host.js'
 
 export const name = 'agent-mesh-chat'
-const CHAT_VERSION = '0.1.0'
+const CHAT_VERSION = await packageVersionOf(new URL('../package.json', import.meta.url))
 export const inject = ['agentMesh', 'credentials']
 
 export interface Config {
@@ -71,7 +71,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const registerInbox = async (): Promise<void> => {
     await new Promise<void>((resolve, reject) => { inboxServer.once('error', reject); inboxServer.listen(port, host, () => resolve()) })
     if (config.inbox?.registerWithSam !== false) {
-      const client = new SamServiceRegistrationClient((ctx as unknown as { agentMesh: { core: import('@morewax/sam-mesh').SamRegistrationTransport } }).agentMesh.core)
+      const client = new SamServiceRegistrationClient((ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh.core as unknown as import('@morewax/sam-mesh').SamRegistrationTransport)
       const address = inboxServer.address()
       const mcpUrl = `http://${host}:${typeof address === 'object' && address ? address.port : port}/mcp`
       registration = await client.register(mcpUrl, { name: inboxName, description: `dsh-mesh-chat DM inbox (dsh-mesh-chat ${CHAT_VERSION})` })
@@ -96,7 +96,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   // tools on its registry (they ride its endpoint + authorizer chain).
   // The publisher fans every appended message out to members over GossipSub.
   const fleetName = config.fleetChannel?.serviceName ?? 'dsh-task-service'
-  const meshCore = (ctx as unknown as { agentMesh: { core: { callTool<T>(name: string, args: Record<string, unknown>): Promise<T>; requestRaw(path: string, options: { method: string; body?: unknown }): Promise<{ status: number; body: AsyncIterable<Uint8Array> }> } } }).agentMesh.core
+  const meshCore = (ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh.core
   // Resolve against discovery: operator-chosen prefixes mean the configured
   // name may only be a SUFFIX of the swarm name.
   const discovered = await meshCore.callTool<Array<{ srv_name?: string }>>('discover_remote_services', { type: 'mcp' }).catch(() => [])
@@ -108,7 +108,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     // llm/adapters-updated) and refetches on arrival.
     try { for (const listener of (ctx as unknown as { events?: { dispatch?(mode: string, args: unknown[]): unknown } }).events?.dispatch?.('emit', ['mesh-chat/updated']) as Array<() => unknown> | undefined ?? []) listener() } catch { /* non-fatal */ }
   }
-  const operatorCap = await ((ctx as unknown as { agentMesh: { resolveCallCapability?: () => Promise<string | undefined> } }).agentMesh.resolveCallCapability?.().catch(() => undefined) ?? Promise.resolve(undefined))
+  const operatorCap = await ((ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh.resolveCallCapability?.().catch(() => undefined) ?? Promise.resolve(undefined))
   const publisher = config.notifications === false
     ? undefined
     : new FleetPublisher(meshCore, {
@@ -145,7 +145,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   // holds a capability) — arrival pushes a host event; the card refetches.
   let subscriber: FleetSubscriber | undefined
   if (config.notifications !== false) {
-    const resolveCapability = (ctx as unknown as { agentMesh: { resolveCallCapability?: () => Promise<string | undefined> } }).agentMesh.resolveCallCapability
+    const resolveCapability = (ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh.resolveCallCapability
     void (async () => {
       const capability = await resolveCapability?.().catch(() => undefined)
       if (!capability) return // consumer without a fleet: nothing to open
@@ -174,7 +174,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   ctx.effect(() => () => {
     subscriber?.stop()
     if (stopInboxReannounce) stopInboxReannounce()
-    if (registration) void new SamServiceRegistrationClient((ctx as unknown as { agentMesh: { core: import('@morewax/sam-mesh').SamRegistrationTransport } }).agentMesh.core).unregister(registration).catch(() => undefined)
+    if (registration) void new SamServiceRegistrationClient((ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh.core as unknown as import('@morewax/sam-mesh').SamRegistrationTransport).unregister(registration).catch(() => undefined)
     inboxServer.close()
     store.close()
   })

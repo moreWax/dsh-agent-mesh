@@ -2,7 +2,8 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { SamNodeManager, type EnrollmentInfo, type NodeStatus } from "@morewax/sam-mesh/node"
 import { buildChecks, decodeFleetInvite, mergeProfilePatch, fleetProfilePatch, type DoctorCheck, type FleetInvite } from "@morewax/sam-mesh/plan"
-import { generatePairKeys, open } from "@morewax/sam-mesh"
+import { generatePairKeys, open, toolPayload } from "@morewax/sam-mesh"
+import { FleetAdminOps } from "./fleet-admin.js"
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -34,18 +35,6 @@ export type ActionResult = { ok: true; message: string; value?: unknown } | { ok
 
 export class AgentMeshWebHost extends TypertRemoteService {
   constructor(ctx: Context, private readonly mesh: AgentMeshService, private readonly nodes = new SamNodeManager(), private readonly ownership: NodeOwnership = { startedByUs: false }, private readonly settings: () => AgentMeshSettings = () => ({ autoStartNode: true, autoBeginEnrollment: true, stopNodeOnExit: true, nodeControlPlane: "", nodeBinary: "", nodeEnrollmentCredentialRef: "", tcpUrl: "", timeoutMs: 30_000, preferSocket: true, socketPath: false }), private readonly resolveEnrollmentToken: () => Promise<string | undefined> = async () => undefined, private readonly ensureNodeToken: () => Promise<string | undefined> = async () => undefined) { super(ctx, "agentMeshWeb") }
-
-  /** Unwrap an MCP tool envelope: callRemoteTool returns { content, structuredContent } —
-   *  reading fields off the envelope is the classic silent-failure (state/pending/members
-   *  read as undefined while the call succeeds). Payload-first, envelope as fallback. */
-  private static toolPayload<T extends Record<string, unknown>>(result: unknown): T {
-    if (typeof result === "object" && result !== null) {
-      const structured = (result as { structuredContent?: unknown }).structuredContent
-      if (structured && typeof structured === "object") return structured as T
-      return result as T
-    }
-    return {} as T
-  }
 
   @Remote("snapshot")
   async snapshot(): Promise<MeshDashboardSnapshot> {
@@ -267,7 +256,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     if (!session || session.state !== "waiting") return
     if (Date.now() - startedAt > 10 * 60_000) return this.failPairSession(sessionId, "Timed out waiting for operator approval")
     let poll: { state: string; sealed?: Parameters<typeof open>[0] }
-    try { poll = AgentMeshWebHost.toolPayload<typeof poll>(await this.mesh.core.callRemoteTool({ peer_id: peerId, tool_name: `mcp://${session.fleet}/fleet_pair_poll`, arguments: { requestId: session.requestId } })) }
+    try { poll = toolPayload<typeof poll>(await this.mesh.core.callRemoteTool({ peer_id: peerId, tool_name: `mcp://${session.fleet}/fleet_pair_poll`, arguments: { requestId: session.requestId } })) }
     catch { return } // transient mesh errors keep polling
     if (poll.state === "unknown") return this.failPairSession(sessionId, "Request expired or was rejected")
     if (poll.state !== "approved" || !poll.sealed) return
@@ -363,7 +352,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const provider = await this.fleetAdminProvider(request)
     if (typeof provider === "string") return { ok: false, error: provider }
     try {
-      const result = AgentMeshWebHost.toolPayload<{ pending?: { requestId: string; label: string; requestedAt?: string }[] }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_list`, arguments: { _capability: provider.capability } }))
+      const result = toolPayload<{ pending?: { requestId: string; label: string; requestedAt?: string }[] }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_list`, arguments: { _capability: provider.capability } }))
       return { ok: true, pending: Array.isArray(result?.pending) ? result.pending : [] }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
@@ -373,7 +362,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const provider = await this.fleetAdminProvider(request)
     if (typeof provider === "string") return { ok: false, error: provider }
     try {
-      const result = AgentMeshWebHost.toolPayload<{ label?: string }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_approve`, arguments: { _capability: provider.capability, requestId: request.requestId, approvedBy: approval.approvedBy.trim() } }))
+      const result = toolPayload<{ label?: string }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_approve`, arguments: { _capability: provider.capability, requestId: request.requestId, approvedBy: approval.approvedBy.trim() } }))
       return { ok: true, message: `Approved '${result?.label ?? request.requestId}' on ${provider.service} — invite sealed and delivered` }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
@@ -383,7 +372,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const provider = await this.fleetAdminProvider(request)
     if (typeof provider === "string") return { ok: false, error: provider }
     try {
-      await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_pair_reject`, arguments: { _capability: provider.capability, requestId: request.requestId } })
+      await this.fleetAdminOps().reject(provider, request.requestId)
       return { ok: true, message: "Request rejected" }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
@@ -393,7 +382,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const provider = await this.fleetAdminProvider(request)
     if (typeof provider === "string") return { ok: false, error: provider }
     try {
-      const result = AgentMeshWebHost.toolPayload<{ members?: { id: string; name: string; scopes: string[]; createdAt: string; note?: string }[] }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_member_list`, arguments: { _capability: provider.capability } }))
+      const result = toolPayload<{ members?: { id: string; name: string; scopes: string[]; createdAt: string; note?: string }[] }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_member_list`, arguments: { _capability: provider.capability } }))
       return { ok: true, members: Array.isArray(result?.members) ? result.members : [] }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
@@ -404,7 +393,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const provider = await this.fleetAdminProvider(request)
     if (typeof provider === "string") return { ok: false, error: provider }
     try {
-      await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_member_revoke`, arguments: { _capability: provider.capability, id: request.id } })
+      await this.fleetAdminOps().revoke(provider, request.id)
       return { ok: true, message: `Member ${request.id} revoked — capability fails on the next gated call` }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
@@ -430,7 +419,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
       ?? services.find(s => typeof s.srv_name === "string" && s.srv_name.endsWith("task-service") && s.peer_id)
     if (!memberService?.peer_id) return { ok: false, error: "no task service visible for the member (is it online?)" }
     try {
-      const result = AgentMeshWebHost.toolPayload<{ exit?: number | null; stdout?: string; stderr?: string; timedOut?: boolean }>(await this.mesh.core.callRemoteTool({
+      const result = toolPayload<{ exit?: number | null; stdout?: string; stderr?: string; timedOut?: boolean }>(await this.mesh.core.callRemoteTool({
         peer_id: memberService.peer_id,
         tool_name: `mcp://${memberService.srv_name}/peer_exec`,
         arguments: { _capability: member.capability, command: request.command.trim(), ...(request.timeoutMs ? { timeoutMs: Math.min(request.timeoutMs, 30_000) } : {}) },
@@ -444,7 +433,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const provider = await this.fleetAdminProvider(request)
     if (typeof provider === "string") return { ok: false, error: provider }
     try {
-      const result = AgentMeshWebHost.toolPayload<{ rows?: Record<string, { systemPrompt?: string; temperature?: number; topP?: number; maxTokens?: number }> }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/inference_steer_status`, arguments: { _capability: provider.capability, ...(request.row ? { row: request.row } : {}) } }))
+      const result = toolPayload<{ rows?: Record<string, { systemPrompt?: string; temperature?: number; topP?: number; maxTokens?: number }> }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/inference_steer_status`, arguments: { _capability: provider.capability, ...(request.row ? { row: request.row } : {}) } }))
       return { ok: true, rows: result.rows ?? {} }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
@@ -455,7 +444,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const provider = await this.fleetAdminProvider(request)
     if (typeof provider === "string") return { ok: false, error: provider }
     try {
-      const result = AgentMeshWebHost.toolPayload<{ steered?: string }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/inference_steer`, arguments: { _capability: provider.capability, ...(request.row ? { row: request.row } : {}), ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { topP: request.topP } : {}), ...(request.maxTokens !== undefined ? { maxTokens: request.maxTokens } : {}), ...(request.clear === true ? { clear: true } : {}) } }))
+      const result = toolPayload<{ steered?: string }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/inference_steer`, arguments: { _capability: provider.capability, ...(request.row ? { row: request.row } : {}), ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}), ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), ...(request.topP !== undefined ? { topP: request.topP } : {}), ...(request.maxTokens !== undefined ? { maxTokens: request.maxTokens } : {}), ...(request.clear === true ? { clear: true } : {}) } }))
       return { ok: true, message: `Steering live on ${result.steered ?? request.row ?? 'default row'} — takes effect on the next request` }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
@@ -466,11 +455,13 @@ export class AgentMeshWebHost extends TypertRemoteService {
     const provider = await this.fleetAdminProvider(request)
     if (typeof provider === "string") return { ok: false, error: provider }
     try {
-      const result = AgentMeshWebHost.toolPayload<{ code?: string; expiresAt?: number }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_invite_create`, arguments: { _capability: provider.capability, ...(request.ttlMs ? { ttlMs: request.ttlMs } : {}), ...(request.note ? { note: request.note } : {}) } }))
+      const result = toolPayload<{ code?: string; expiresAt?: number }>(await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_invite_create`, arguments: { _capability: provider.capability, ...(request.ttlMs ? { ttlMs: request.ttlMs } : {}), ...(request.note ? { note: request.note } : {}) } }))
       if (typeof result.code !== "string") return { ok: false, error: "service returned no code" }
       return { ok: true, code: result.code, ...(result.expiresAt !== undefined ? { expiresAt: result.expiresAt } : {}) }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
+
+  private fleetAdminOps(): FleetAdminOps { return new FleetAdminOps(this.mesh as unknown as import('@morewax/sam-mesh').AgentMeshFace) }
 
   /** Resolve the fleet provider + capability for admin calls; string = human error. */
   private async fleetAdminProvider(request: { serviceName?: string; peerId?: string }): Promise<{ peerId: string; service: string; capability: string } | string> {
