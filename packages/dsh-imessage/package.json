@@ -24,10 +24,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "*",
-    "tsdown": "*",
-    "typescript": "*",
-    "vitest": "*",
-    "@types/node": "*"
+    "@deepseek-ai/cordis": "^4.0.1",
+    "tsdown": "^0.15.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^24.0.0"
   }
 }
