@@ -60,6 +60,14 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   let db: DatabaseSync | undefined
   let dbError: string | undefined
+    // Hardware key check (Linux only): the extraction tool runs on macOS and
+  // produces a validation blob. Without it, the bridge cannot authenticate.
+  const validateHardwareKey = (): boolean => {
+    if (process.platform !== 'linux') return true // macOS has native access
+    const keyPath = join(stateDir, 'hardware-key.bin')
+    return require('node:fs').existsSync(keyPath)
+  }
+
   const openDb = (): DatabaseSync => {
     if (db) return db
     try {
@@ -167,4 +175,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (timer) clearInterval(timer)
     db?.close()
   })
+
+  // Boot-time hardware key check (Linux only)
+  if (process.platform === 'linux' && !validateHardwareKey()) {
+    console.warn('[dsh-imessage] hardware key missing — run the ExtractKey tool on any Mac (see corten-matrix tools/) and place the output at:', join(stateDir, 'hardware-key.bin'))
+  }
 }
