@@ -45,7 +45,7 @@ export class BridgeBackend implements IMessageBackend {
             'authorization': `Bearer ${this.config.accessToken}`,
             'content-type': 'application/octet-stream',
           },
-          body: (await import('node:fs/promises')).readFile(file),
+          body: (await import('node:fs/promises')).readFile(file) as unknown as BodyInit,
         })
         const upload = await uploadRes.json() as { content_uri?: string }
         if (!upload.content_uri) throw new Error('upload failed')

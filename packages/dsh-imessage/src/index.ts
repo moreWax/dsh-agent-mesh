@@ -54,6 +54,26 @@ const FDA_FIX = 'Full Disk Access missing — System Settings → Privacy & Secu
 export function apply(ctx: Context, config: Config = {}): void {
   const dbPath = (config.dbPath ?? '~/Library/Messages/chat.db').replace(/^~(?=\/)/, homedir())
   const stateDir = (config.stateDir ?? '~/.config/dsh-imessage').replace(/^~(?=\/)/, homedir())
+
+  // ── k3s deployment (Linux only): the plugin carries its own k8s manifests ──
+  // On Linux, the iMessage backend needs corten-matrix + Conduit + Synapse.
+  // The plugin bootstraps a single-node k3s cluster (if none exists) and
+  // deploys all three as workloads. On macOS, none of this is needed.
+  if (process.platform === 'linux') {
+    void (async () => {
+      try {
+        const { ensureCluster, deployStack, waitForHealthy } = await import('./k3s-deploy.js')
+        console.info('[dsh-imessage] ensuring k3s cluster...')
+        await ensureCluster()
+        console.info('[dsh-imessage] deploying matrix stack...')
+        await deployStack('imessage')
+        await waitForHealthy('imessage')
+        console.info('[dsh-imessage] matrix stack healthy')
+      } catch (error) {
+        console.error(`[dsh-imessage] k3s deployment failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })()
+  }
   const allowSms = config.allowSms === true
   const ownHandles = (config.ownHandles ?? []).map(h => h.trim().toLowerCase())
   const access = new JsonFileView<AccessFile>(join(stateDir, 'access.json'), raw => JSON.parse(raw) as AccessFile, defaultAccess(), async p => (await import('node:fs/promises')).stat(p))
