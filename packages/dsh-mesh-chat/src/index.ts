@@ -20,6 +20,7 @@ import { SQLiteChatStore } from './store.js'
 import { createInboxServer } from './inbox.js'
 import { registerFleetChatTools, type ToolMountService } from './fleet-channel.js'
 import { FleetPublisher, FleetSubscriber, chatTopic } from './notifier.js'
+import { startHealthBeacon, healthOf, healthTopic, type HealthState } from './health.js'
 import { MeshChatWebHost } from './web/host.js'
 
 export const name = 'agent-mesh-chat'
@@ -67,6 +68,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const port = config.inbox?.port ?? 0
   const inboxName = config.inbox?.serviceName ?? 'dsh-chat-inbox'
   let registration: Awaited<ReturnType<SamServiceRegistrationClient['register']>> | undefined
+  let stopHealthBeacon: (() => void) | undefined
   let stopInboxReannounce: (() => void) | undefined
   const registerInbox = async (): Promise<void> => {
     await new Promise<void>((resolve, reject) => { inboxServer.once('error', reject); inboxServer.listen(port, host, () => resolve()) })
@@ -126,6 +128,21 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         fetch: (afterId, limit) => store.fetch('fleet', afterId, limit),
         send: text => { const message = store.append('fleet', { kind: 'user', sender: 'operator', text }); notifyAppend?.(message) },
       }
+      // The operator-as-emitter: this machine hosts the fleet, so it probes
+      // hub trust in ONE place and broadcasts signed health to every member.
+      if (publisher) {
+        stopHealthBeacon = startHealthBeacon({
+          serviceName: resolvedFleet,
+          publisher,
+          bus: meshCore,
+          onTransition: (healthy, rejectionCount) => {
+            const note = healthy ? 'hub trust recovered — mesh signatures verify again' : `hub trust degraded — ${rejectionCount} peers reject our identity (rotation missed or hub inconsistent)`
+            const message = store.append('fleet', { kind: 'system', sender: 'system', text: note })
+            notifyAppend?.(message)
+          },
+          log: line => console.info(`[mesh-chat] ${line}`),
+        })
+      }
     })
   }
 
@@ -143,6 +160,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
 
   // 5. Subscriber: consume the fleet's GossipSub feed (when this machine
   // holds a capability) — arrival pushes a host event; the card refetches.
+  let healthState: HealthState | undefined
   let subscriber: FleetSubscriber | undefined
   if (config.notifications !== false) {
     const resolveCapability = (ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh.resolveCallCapability
@@ -153,9 +171,13 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         serviceName: resolvedFleet,
         capability,
         log: line => console.info(`[mesh-chat] ${line}`),
-        onMessage: message => { emitUpdated(); void message },
+        onMessage: message => {
+          const health = healthOf(message as unknown as { channel?: string; sender?: string; text?: string })
+          if (health) healthState = { hubConsistent: health.hubConsistent, rejectionCount: health.rejectionCount, ts: health.ts }
+          emitUpdated()
+        },
       })
-      await subscriber.start().catch(error => ctx.logger.warn(`[mesh-chat] subscribe failed: ${error instanceof Error ? error.message : String(error)}`))
+      await subscriber.start([healthTopic(resolvedFleet)]).catch(error => ctx.logger.warn(`[mesh-chat] subscribe failed: ${error instanceof Error ? error.message : String(error)}`))
     })()
   }
 
@@ -165,6 +187,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   let localFleet: { fetch(afterId: number, limit: number): unknown[]; send(text: string): void } | undefined
   new MeshChatWebHost(ctx, {
     get localFleet() { return localFleet },
+    get health() { return healthState },
     store,
     ...(config.inbox?.serviceName ? { inboxServiceName: config.inbox.serviceName } : {}),
     ...(config.fleetChannel?.serviceName ? { fleetServiceName: config.fleetChannel.serviceName } : {}),
@@ -173,6 +196,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
 
   ctx.effect(() => () => {
     subscriber?.stop()
+    if (stopHealthBeacon) stopHealthBeacon()
     if (stopInboxReannounce) stopInboxReannounce()
     if (registration) void new SamServiceRegistrationClient((ctx as unknown as { agentMesh: AgentMeshFace }).agentMesh.core as unknown as import('@morewax/sam-mesh').SamRegistrationTransport).unregister(registration).catch(() => undefined)
     inboxServer.close()

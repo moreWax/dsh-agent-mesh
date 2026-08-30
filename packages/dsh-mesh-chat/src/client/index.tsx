@@ -14,7 +14,7 @@ import React, { useEffect, useRef, useState } from "react"
 import { TYPERT_REMOTE } from "../remote.js"
 
 type ChatMessage = { id: number; kind: "user" | "system"; sender: string; text: string; ts: number; meta?: unknown }
-type Snapshot = { fleet: { available: boolean; cursor: number; messages: ChatMessage[]; error?: string }; inbox: { serviceName: string; messages: ChatMessage[] }; peers: Array<{ peerId: string; name: string }> }
+type Snapshot = { fleet: { available: boolean; cursor: number; messages: ChatMessage[]; error?: string }; inbox: { serviceName: string; messages: ChatMessage[] }; peers: Array<{ peerId: string; name: string }>; health?: { hubConsistent: boolean; rejectionCount: number; ts: number; stale: boolean } }
 type ActionResult = { ok: boolean; message?: string; error?: string }
 
 const box: React.CSSProperties = { border: "1px solid var(--border,#444)", borderRadius: 8, padding: 10, display: "grid", gap: 8 }
@@ -145,8 +145,12 @@ function ChatSection({ api, steer }: { api: ChatApi; steer?: SteerFace | undefin
   }
 
   const messages = (tab === "fleet" ? fleetMsgs : dmMsgs).filter(m => showSystem || m.kind !== "system")
+  const health = snapshot.health
   return <section style={box} data-testid="mesh-chat">
-    <strong>Mesh chat</strong>
+    <strong>Mesh chat</strong>{" "}
+    {health && <small title={health.stale ? "operator beacon silent — the operator may be unreachable" : health.hubConsistent ? "hub trust healthy" : `${health.rejectionCount} peers reject the operator's identity`}>
+      {health.stale ? "⚪ beacon silent" : health.hubConsistent ? "🟢 mesh healthy" : "🟠 trust degraded"}
+    </small>}
     {steer && <SteerDock steer={steer} />}
     <div>
       <button style={{ ...button, fontWeight: tab === "fleet" ? 700 : 400 }} onClick={() => setTab("fleet")}>Fleet channel{fleetUnread > 0 ? ` (${fleetUnread})` : ""}</button>{" "}

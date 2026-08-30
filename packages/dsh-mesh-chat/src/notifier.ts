@@ -63,7 +63,7 @@ export class FleetPublisher {
     this.members = new MemberFileView(options.membersPath)
   }
   /** Seal a chat message to every current member (+ operator) and broadcast. Never throws — notifications must not break the chat path. */
-  async publish(message: ChatMessage): Promise<void> {
+  async publish(message: ChatMessage, topic?: string): Promise<void> {
     try {
       const members = await this.members.members()
       this.options.log?.(`publish: ${members.length} member slot(s)${this.options.operatorCapability ? ' + operator' : ''} for message ${message.id}`)
@@ -75,7 +75,7 @@ export class FleetPublisher {
       const envelope: NotifyEnvelope = { kind: 'dsh-chat-event', service: this.options.serviceName, cursor: message.id, sealed }
       // base64url the compact JSON: poll_messages joins entries with spaces,
       // so payloads must be whitespace-free.
-      await this.bus.callTool('mesh_pubsub_broadcast', { topic: chatTopic(this.options.serviceName), payload: Buffer.from(JSON.stringify(envelope)).toString('base64url') })
+      await this.bus.callTool('mesh_pubsub_broadcast', { topic: topic ?? chatTopic(this.options.serviceName), payload: Buffer.from(JSON.stringify(envelope)).toString('base64url') })
     } catch (error) { this.options.log?.(`notify publish failed: ${error instanceof Error ? error.message : String(error)}`) }
   }
 }
@@ -95,11 +95,14 @@ export class FleetSubscriber {
   constructor(private readonly bus: NotifyBus, private readonly options: SubscriberOptions) {
     this.keys = deriveNotifyKeys(options.capability)
   }
-  async start(): Promise<void> {
+  async start(extraTopics: readonly string[] = []): Promise<void> {
     await this.bus.callTool('subscribe_topic', { topic: chatTopic(this.options.serviceName) })
+    for (const topic of extraTopics) await this.bus.callTool('subscribe_topic', { topic })
+    this.extraTopics = extraTopics
     this.timer = setInterval(() => void this.poll(), this.options.pollIntervalMs ?? 1500)
     this.timer.unref?.()
   }
+  private extraTopics: readonly string[] = []
   stop(): void { if (this.timer) clearInterval(this.timer) }
   /** Parse the Sprintf dump: "Messages on topic <t>: [a b c]" → payloads. */
   static payloadsOf(text: string, topic: string): string[] {
@@ -109,10 +112,13 @@ export class FleetSubscriber {
     return inner === '' ? [] : inner.split(' ')
   }
   private async poll(): Promise<void> {
+    for (const topic of [chatTopic(this.options.serviceName), ...this.extraTopics]) await this.pollTopic(topic)
+  }
+  private async pollTopic(topic: string): Promise<void> {
     try {
-      const result = await this.bus.callTool<{ content?: Array<{ text?: string }> }>('poll_messages', { topic: chatTopic(this.options.serviceName) })
+      const result = await this.bus.callTool<{ content?: Array<{ text?: string }> }>('poll_messages', { topic })
       const text = result?.content?.[0]?.text ?? ''
-      for (const token of FleetSubscriber.payloadsOf(text, chatTopic(this.options.serviceName))) {
+      for (const token of FleetSubscriber.payloadsOf(text, topic)) {
         let envelope: NotifyEnvelope
         try { envelope = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) } catch { continue }
         if (envelope?.kind !== 'dsh-chat-event') continue

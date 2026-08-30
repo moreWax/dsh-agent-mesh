@@ -17,6 +17,8 @@ export interface ChatSnapshot {
   inbox: { serviceName: string; messages: ChatMessageView[] }
   /** DM-reachable peers (discovered dsh-chat-inbox services) — the card renders a picker, never a free-text peer id. */
   peers: Array<{ peerId: string; name: string }>
+  /** Fleet health from the operator's beacon (undefined until the first beacon lands). */
+  health?: { hubConsistent: boolean; rejectionCount: number; ts: number; stale: boolean }
 }
 
 
@@ -27,6 +29,7 @@ export class MeshChatWebHost extends TypertRemoteService {
     private readonly options: {
       /** Set when THIS machine hosts the fleet channel — the card reads/writes the store in-process. */
       localFleet?: { fetch(afterId: number, limit: number): unknown[]; send(text: string): void } | undefined
+      health?: { hubConsistent: boolean; rejectionCount: number; ts: number } | undefined
       store: { fetch(channel: string, afterId?: number, limit?: number): Array<{ id: number; kind: string; sender: string; text: string; ts: number; meta?: unknown }>; append(channel: string, message: { kind: 'user' | 'system'; sender: string; text: string; meta?: unknown }): { id: number } }
       inboxServiceName?: string
       fleetServiceName?: string
@@ -60,6 +63,12 @@ export class MeshChatWebHost extends TypertRemoteService {
     return [...exact, ...fuzzy].map(s => ({ peerId: s.peer_id!, service: s.srv_name as string }))
   }
 
+  private healthView(): Partial<Pick<ChatSnapshot, 'health'>> {
+    const health = this.options.health
+    if (!health) return {}
+    return { health: { ...health, stale: Date.now() - health.ts > 11 * 60_000 } }
+  }
+
   /** Snapshot both channels. afterId = last-seen fleet cursor (0 = tail-fetch the recent window). */
   // NOTE: gateway SRC-mode reflection forbids destructured/defaulted/rest
   // parameters on @Remote methods — plain unique identifiers only.
@@ -74,7 +83,7 @@ export class MeshChatWebHost extends TypertRemoteService {
       fleet.messages = messages
       fleet.cursor = messages.length > 0 ? messages[messages.length - 1]!.id : afterId
       const inbox = { serviceName: this.options.inboxServiceName ?? 'dsh-chat-inbox', messages: this.options.store.fetch('inbox', 0, 50).slice(-50) as ChatMessageView[] }
-      return { fleet, inbox, peers: await this.inboxPeers() }
+      return { fleet, inbox, peers: await this.inboxPeers(), ...this.healthView() }
     }
     const candidates = await this.fleetCandidates()
     if (candidates.length === 0) fleet.error = `no '${this.options.fleetServiceName ?? 'dsh-task-service'}' fleet service visible in the swarm`
@@ -103,7 +112,7 @@ export class MeshChatWebHost extends TypertRemoteService {
       if (!fleet.available) fleet.error = lastError || 'fleet channel unavailable (no member capability?)'
     }
     const inbox = { serviceName: this.options.inboxServiceName ?? 'dsh-chat-inbox', messages: this.options.store.fetch('inbox', 0, 50).slice(-50) as ChatMessageView[] }
-    return { fleet, inbox, peers: await this.inboxPeers() }
+    return { fleet, inbox, peers: await this.inboxPeers(), ...this.healthView() }
   }
 
   /** Send to the fleet channel (member-gated). */
