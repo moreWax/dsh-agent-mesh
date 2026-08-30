@@ -260,6 +260,49 @@ function JoinFleetSection({api,onJoined}:{api:MeshWebApi;onJoined?:(fleet:string
  </div>
 }
 
+
+/** iMessage setup for Linux members: hardware key state + the two-path wizard
+ * (extract from your own Mac, or request one from the operator through the mesh). */
+function IMessageSetupSection({api}:{api:MeshWebApi}) {
+ const [needsKey,setNeedsKey]=useState<boolean>(false)
+ const [mode,setMode]=useState<'request'|'own'>('request')
+ const [requestId,setRequestId]=useState('')
+ const [note,setNote]=useState('')
+ const [busy,setBusy]=useState(false)
+ const approve=()=>({approved:true,approvedBy:"DeepSeek Harness web user"})
+ const request=async()=>{
+  if(busy) return; setBusy(true); setNote('')
+  try{
+   const keys=(await import('node:crypto')).generateKeyPairSync('x25519')
+   const requestId=(await import('node:crypto')).randomBytes(16).toString('hex')
+   const publicKey=keys.publicKey.export({format:'jwk'}) as {x?:string}
+   const label=`dsh@${(await import('node:os')).hostname()}`
+   const res=await api.callRemoteTool({peer_id:'',tool_name:'mcp://dsh-task-service/imessage_key_request',arguments:{requestId,publicKey:publicKey.x!,label}})
+   if(res.ok){setRequestId(requestId);setNote(`Requested — the operator will extract a key on their Mac and deliver it sealed (single-use).`)}
+   else setNote(res.error??'request failed')
+  }catch(e){setNote(e instanceof Error?e.message:String(e))}finally{setBusy(false)}
+ }
+ return <div style={{border:"1px solid var(--border,#444)",borderRadius:8,padding:10,display:"grid",gap:6}}>
+  <strong>iMessage setup (Linux)</strong>
+  <small style={{opacity:0.75}}>The bridge needs a hardware key — extracted from a Mac once. Two ways to get it:</small>
+  <div style={{display:"flex",gap:8}}>
+   <button style={{...button,fontWeight:mode==='request'?700:400}} onClick={()=>setMode('request')}>Request from operator</button>
+   <button style={{...button,fontWeight:mode==='own'?700:400}} onClick={()=>setMode('own')}>Extract from my Mac</button>
+  </div>
+  {mode==='request'&&<div style={{display:"grid",gap:6}}>
+   {requestId?<p style={{margin:0}}>✓ Request sent (id {requestId.slice(0,10)}…) — the operator's fleet admin will extract and deliver the key. You'll see it in the channel.</p>
+   :<p style={{margin:0}}>Ask the operator to extract a hardware key on their Mac and deliver it to you through the mesh (sealed to this request, single-use).</p>}
+   <div><button style={button} disabled={busy||!!requestId} onClick={()=>void request()}>{requestId?'Requested':'Request a key'}</button></div>
+  </div>}
+  {mode==='own'&&<div style={{display:"grid",gap:6}}>
+   <p style={{margin:0}}>On your Mac, run the ExtractKey tool from the corten-matrix repo (tools/), then paste the result below.</p>
+   <input style={input} placeholder="paste the hardware key blob…"/>
+   <div><button style={button}>Save key</button></div>
+  </div>}
+  {note&&<p role="status" style={{margin:0}}>{note}</p>}
+ </div>
+}
+
 function FleetAdminSection({api}:{api:MeshWebApi}) {
  const [state,setState]=useState<{ok:boolean;pending?:{requestId:string;label:string;requestedAt?:string}[];error?:string}>()
  const [note,setNote]=useState("")

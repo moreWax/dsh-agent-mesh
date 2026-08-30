@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { JsonFileView, toolPayload, type AgentMeshFace, type TaskServiceToolMount } from '@morewax/sam-mesh'
+import { keyTools } from './key-tools.js'
 import { openMessagesDb, currentWatermark, fetchSince, fetchHistory, searchMessages, chatParticipants, type IMessage } from './db.js'
 import { sendIMessage } from './sender.js'
 import { defaultAccess, isAllowed, type AccessFile } from './access.js'
@@ -163,6 +164,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     ctx.inject(['agentMeshTaskService'], (taskCtx) => {
       const service = (taskCtx as unknown as { agentMeshTaskService: TaskServiceToolMount }).agentMeshTaskService
       for (const tool of tools) service.tools.register(tool)
+      // Hardware key distribution (Linux members request, operator fulfills)
+      for (const tool of keyTools()) service.tools.register(tool)
     })
   }
 
