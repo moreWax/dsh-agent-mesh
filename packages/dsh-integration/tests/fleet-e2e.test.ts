@@ -108,6 +108,18 @@ describe('fleet e2e over the wire', () => {
     await mesh.callRemoteTool({ peer_id: 'fleet', tool_name: 'mcp://dsh-task-service/fleet_member_revoke', arguments: { _capability: OPERATOR, id: memberId } })
     await expect(mesh.callRemoteTool({ peer_id: 'fleet', tool_name: 'mcp://dsh-task-service/chat_send', arguments: { _capability: memberCap, text: 'am I still here?' } })).rejects.toThrow(/capability/)
 
+    // ── re-pair (D1): a fresh invite code admits the same machine as a NEW member
+    const created2 = (await mesh.callRemoteTool({ peer_id: 'fleet', tool_name: 'mcp://dsh-task-service/fleet_invite_create', arguments: { _capability: OPERATOR } })) as { structuredContent: { code: string } }
+    const joiner2 = generatePairKeys()
+    const requestId2 = 'e2e2-' + Date.now().toString(16) + 'abcdef'
+    const req2 = (await mesh.callRemoteTool({ peer_id: 'fleet', tool_name: 'mcp://dsh-task-service/fleet_pair_request', arguments: { requestId: requestId2, publicKey: joiner2.publicKeyX, label: 'e2e-joiner-repaired', inviteCode: created2.structuredContent.code } })) as { structuredContent: { autoApproved?: string } }
+    expect(req2.structuredContent.autoApproved).toBe('invite-code')
+    const poll2 = (await mesh.callRemoteTool({ peer_id: 'fleet', tool_name: 'mcp://dsh-task-service/fleet_pair_poll', arguments: { requestId: requestId2 } })) as { structuredContent: { state: string; sealed: Parameters<typeof open>[0] } }
+    const invite2 = JSON.parse(open(poll2.structuredContent.sealed, joiner2.privateKey)) as { capability: string }
+    await mesh.callRemoteTool({ peer_id: 'fleet', tool_name: 'mcp://dsh-task-service/chat_send', arguments: { _capability: invite2.capability, text: 'back from revocation' } })
+    const page2 = (await mesh.callRemoteTool({ peer_id: 'fleet', tool_name: 'mcp://dsh-task-service/chat_fetch', arguments: { _capability: invite2.capability } })) as { structuredContent: { messages: Array<{ sender: string; text: string }> } }
+    expect(page2.structuredContent.messages.some(m => m.sender === 'e2e-joiner-repaired' && m.text === 'back from revocation')).toBe(true)
+
     http.stop(); inboxServer.close(); chatStore.close(); inboxStore.close()
   })
 })

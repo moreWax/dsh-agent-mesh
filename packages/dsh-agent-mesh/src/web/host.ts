@@ -186,7 +186,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
    * DIFFERENT hub (e.g. a stale private-hub identity) sees an empty swarm
    * here, and "No fleets visible" alone never says why. */
   @Remote("fleetDiscover") async fleetDiscover(): Promise<{
-    fleets: { name: string; providers: number; peerIds: string[] }[]
+    fleets: { name: string; providers: number; peerIds: string[]; description?: string }[]
     node: { running: boolean; enrolled: boolean; enrolledHub: string | null }
     /** C1: the trust watcher escalated an unhealable identity — the card shows a persistent re-approval banner. */
     needsReenroll: boolean
@@ -195,9 +195,11 @@ export class AgentMeshWebHost extends TypertRemoteService {
   }> {
     const services = await this.mesh.core.discoverRemoteServices({ type: "mcp" })
     const byName = new Map<string, string[]>()
+    const descriptions = new Map<string, string>()
     for (const s of services) {
       if (typeof s.srv_name !== "string" || typeof s.peer_id !== "string" || !s.srv_name || !s.peer_id) continue
       byName.set(s.srv_name, [...(byName.get(s.srv_name) ?? []), s.peer_id])
+      if (typeof s.srv_description === "string" && s.srv_description) descriptions.set(s.srv_name, s.srv_description)
     }
     const status = await this.nodes.status()
     // C1: the A1 watcher's escalation marker.
@@ -228,7 +230,7 @@ export class AgentMeshWebHost extends TypertRemoteService {
       }
     }
     return {
-      fleets: [...byName.entries()].map(([name, peerIds]) => ({ name, providers: peerIds.length, peerIds })),
+      fleets: [...byName.entries()].map(([name, peerIds]) => ({ name, providers: peerIds.length, peerIds, ...(descriptions.has(name) ? { description: descriptions.get(name)! } : {}) })),
       node: { running: status.running, enrolled: status.enrolled, enrolledHub: status.enrolledHub },
       needsReenroll,
       membership,
@@ -404,6 +406,36 @@ export class AgentMeshWebHost extends TypertRemoteService {
     try {
       await this.mesh.core.callRemoteTool({ peer_id: provider.peerId, tool_name: `mcp://${provider.service}/fleet_member_revoke`, arguments: { _capability: provider.capability, id: request.id } })
       return { ok: true, message: `Member ${request.id} revoked — capability fails on the next gated call` }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  /** Operator diagnostics console: run a bounded command on a fleet member's
+   * machine through the mesh (peer_exec). Trust math: the member's capability
+   * is in the operator's registry — only the operator can do this. */
+  @Remote("peerExec") async peerExec(request: { command: string; memberId?: string; timeoutMs?: number }, approval: ApprovedAction): Promise<{ ok: boolean; member?: string; exit?: number | null; stdout?: string; stderr?: string; timedOut?: boolean; error?: string }> {
+    if (!approval.approved || !approval.approvedBy?.trim()) return { ok: false, error: "Explicit approval and approver name are required." }
+    if (!request.command?.trim()) return { ok: false, error: "command is required" }
+    const registryPath = join(homedir(), ".config", "sam-mesh", "fleet-members.json")
+    let members: Array<{ id: string; name: string; capability: string }> = []
+    try {
+      const parsed = JSON.parse(await readFile(registryPath, "utf8")) as { members?: Array<{ id: string; name: string; capability: string }> }
+      if (Array.isArray(parsed.members)) members = parsed.members
+    } catch { /* no registry — not an operator machine */ }
+    if (members.length === 0) return { ok: false, error: "no fleet members in the registry — peer_exec is an operator surface (run it on the fleet operator)" }
+    const member = request.memberId ? members.find(m => m.id === request.memberId || m.name === request.memberId) : members[0]
+    if (!member) return { ok: false, error: `no member '${request.memberId}' in the registry` }
+    // The member's own task service gates peer_exec on the member's capability.
+    const services = await this.mesh.core.discoverRemoteServices({ type: "mcp" }).catch(() => [])
+    const memberService = services.find(s => typeof s.srv_name === "string" && s.srv_name.endsWith("task-service-member") && s.peer_id)
+      ?? services.find(s => typeof s.srv_name === "string" && s.srv_name.endsWith("task-service") && s.peer_id)
+    if (!memberService?.peer_id) return { ok: false, error: "no task service visible for the member (is it online?)" }
+    try {
+      const result = AgentMeshWebHost.toolPayload<{ exit?: number | null; stdout?: string; stderr?: string; timedOut?: boolean }>(await this.mesh.core.callRemoteTool({
+        peer_id: memberService.peer_id,
+        tool_name: `mcp://${memberService.srv_name}/peer_exec`,
+        arguments: { _capability: member.capability, command: request.command.trim(), ...(request.timeoutMs ? { timeoutMs: Math.min(request.timeoutMs, 30_000) } : {}) },
+      }, AbortSignal.timeout((request.timeoutMs ?? 30_000) + 5_000)))
+      return { ok: true, member: member.name, ...result }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   }
 

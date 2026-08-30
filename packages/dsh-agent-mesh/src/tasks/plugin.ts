@@ -149,6 +149,7 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
   }); const address=await server.start(); ctx.provide('agentMeshTaskService',service)
   let registration:Awaited<ReturnType<Client['register']>>|undefined
   let stopReannounce:(()=>void)|undefined
+  const PLUGIN_VERSION='0.1.0'
   const registry=new SamTaskRegistrationClient((ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core)
   let retryTimer:ReturnType<typeof setInterval>|undefined
   if(config.registerWithSam!==false){
@@ -175,7 +176,7 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
       const name=effectiveName
       void import('@morewax/sam-mesh/node').then(({ startServiceAnnounceLoop })=>{
         stopReannounce=startServiceAnnounceLoop({
-          name, type:'SERVICE_TYPE_MCP', targetUrl:address.mcpUrl,
+          name, type:'SERVICE_TYPE_MCP', targetUrl:address.mcpUrl, description:`dsh fleet task service (dsh-agent-mesh ${PLUGIN_VERSION})`,
           register: async body => { const res=await (ctx as Context & {agentMesh:AgentMeshService}).agentMesh.core.requestRaw('/sam/service/register',{method:'POST',body}); if(res.status<200||res.status>=300) throw new Error(`re-register failed (${res.status})`) },
           intervalMs: 30_000,
           onLog: line => console.info(`[agent-mesh-task-service] ${line}`),
@@ -183,7 +184,7 @@ export async function apply(ctx:Context,config:Config):Promise<void>{
       })
     }
     const attempt=async():Promise<boolean>=>{
-      try{ registration=await registry.register(address,{name:effectiveName}); startReannounce(); return true }
+      try{ registration=await registry.register(address,{name:effectiveName,description:`dsh fleet task service (dsh-agent-mesh ${PLUGIN_VERSION})`}); startReannounce(); return true }
       catch(error){ ctx.logger.warn(`task service SAM registration failed (will retry): ${error instanceof Error?error.message:String(error)}`); return false }
     }
     if(!await attempt()){

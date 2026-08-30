@@ -12,6 +12,7 @@
     "sam-mesh": "node packages/sam-mesh/lib/cli/index.mjs",
     "dev": "pnpm -r --parallel run dev",
     "check:fresh": "node scripts/check-build-fresh.mjs",
-    "scaffold:remote": "node scripts/scaffold-remote.mjs"
+    "scaffold:remote": "node scripts/scaffold-remote.mjs",
+    "acceptance": "node packages/dsh-mesh-chat/scripts/acceptance-chat-ui.mjs"
   }
 }
