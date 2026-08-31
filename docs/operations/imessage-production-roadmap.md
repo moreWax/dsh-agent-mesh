@@ -6,7 +6,7 @@ Updated at commit following `c1f8837`.
 
 - Task 0: inventory and remove experimental `matrix`/`imessage` workloads.
 - Task 1: stable backend, message, attribution, status, and error contracts.
-- Task 2: platform-isolated dynamic loading; serialized lifecycle; safe replacement rollback; clean unload; explicit profile → persisted setup → platform-default precedence.
+- Task 2: removed the dead privileged `curl`/system-k3s scaffold; platform-isolated dynamic loading; serialized lifecycle; safe replacement rollback; clean unload; explicit profile → persisted setup → platform-default precedence.
 - Task 3 foundation: versioned `setup.json`, atomic `0600` writes with directory fsync, setup lock and stale-lock recovery, transition validation, cancellation, failure recording, interrupted-step recovery, and read-only/operator tools.
 
 ## Task 3 remaining integration
