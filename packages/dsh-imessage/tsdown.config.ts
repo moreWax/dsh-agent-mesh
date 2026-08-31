@@ -17,7 +17,7 @@ const CLIENT_EXTERNALS = new Set([
 ])
 
 const nodeHalf: UserConfig = {
-  entry: ["src/setup-store.ts", "src/backends/controller.ts", "src/backends/load.ts", "src/index.ts", "src/setup.ts", "src/backends/select.ts", "src/backends/interface.ts", "src/backends/errors.ts", "src/backends/native.ts", "src/backends/bridge.ts", "src/db.ts", "src/sender.ts", "src/access.ts", "src/key-tools.ts"],
+  entry: ["src/runtime/rootless-k3s.ts", "src/runtime/external-matrix.ts", "src/runtime/existing-kubernetes.ts", "src/runtime/command.ts", "src/runtime/errors.ts", "src/runtime/interface.ts", "src/runtime/index.ts", "src/setup-store.ts", "src/backends/controller.ts", "src/backends/load.ts", "src/index.ts", "src/setup.ts", "src/backends/select.ts", "src/backends/interface.ts", "src/backends/errors.ts", "src/backends/native.ts", "src/backends/bridge.ts", "src/db.ts", "src/sender.ts", "src/access.ts", "src/key-tools.ts"],
   format: 'esm',
   dts: true,
   outDir: 'lib',

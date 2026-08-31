@@ -47,7 +47,8 @@ export interface Config {
   fleetTools?: boolean
   /** auto = native on macOS, Matrix/corten-matrix on Linux. */
   backend?: BackendChoice
-  matrix?: { homeserverUrl?: string; accessTokenRef?: string; roomId?: string }
+  matrix?: { homeserverUrl?: string; accessTokenRef?: string; roomId?: string; bridgeHealthUrl?: string }
+  runtime?: { mode?: 'existing-kubernetes' | 'rootless-k3s' | 'external-matrix'; kubeconfig?: string; namespace?: string }
 }
 export const Config: z<Config> = z.object({
   dbPath: z.string().default('~/Library/Messages/chat.db'),
@@ -59,7 +60,8 @@ export const Config: z<Config> = z.object({
   ownHandles: z.array(z.string()).default([]),
   fleetTools: z.boolean().default(true),
   backend: z.union(['auto', 'native', 'matrix']).default('auto'),
-  matrix: z.object({ homeserverUrl: z.string(), accessTokenRef: z.string(), roomId: z.string() }),
+  matrix: z.object({ homeserverUrl: z.string(), accessTokenRef: z.string(), roomId: z.string(), bridgeHealthUrl: z.string() }),
+  runtime: z.object({ mode: z.union(['existing-kubernetes', 'rootless-k3s', 'external-matrix']), kubeconfig: z.string(), namespace: z.string() }),
 }) as unknown as z<Config>
 
 const FDA_FIX = 'Full Disk Access missing — System Settings → Privacy & Security → Full Disk Access → allow your terminal (or the dsh host app)'
@@ -114,6 +116,30 @@ export function apply(ctx: Context, config: Config = {}): void {
     const backend = controller.current()
     if (!backend) throw new Error(backendError ?? 'iMessage backend is not configured')
     return backend
+  }
+
+  const configuredRuntimeMode = async () => config.runtime?.mode ?? (await setupStore.read()).runtimeMode
+  const runtimeForCheck = async () => {
+    const mode = await configuredRuntimeMode()
+    if (mode === 'existing-kubernetes') {
+      const kubeconfig = config.runtime?.kubeconfig?.replace(/^~(?=\/)/, homedir())
+      if (!kubeconfig) throw new Error('Existing Kubernetes needs a kubeconfig path')
+      const { ExistingKubernetesRuntime } = await import('./runtime/existing-kubernetes.js')
+      return new ExistingKubernetesRuntime({ kubeconfig, ...(config.runtime?.namespace ? { namespace: config.runtime.namespace } : {}) })
+    }
+    if (mode === 'external-matrix') {
+      const matrix = config.matrix
+      if (!matrix?.homeserverUrl || !matrix.accessTokenRef || !matrix.roomId) throw new Error('External Matrix needs homeserver, room, and credential reference')
+      const resolved = await (ctx as Context & { credentials: { resolve(ref: unknown): Promise<{ value?: string } | undefined> } }).credentials.resolve(credentialRef(matrix.accessTokenRef))
+      if (!resolved?.value) throw new Error('Matrix credential is not provisioned')
+      const { ExternalMatrixRuntime } = await import('./runtime/external-matrix.js')
+      return new ExternalMatrixRuntime({ homeserverUrl: matrix.homeserverUrl, accessToken: resolved.value, roomId: matrix.roomId, ...(matrix.bridgeHealthUrl ? { bridgeHealthUrl: matrix.bridgeHealthUrl } : {}) })
+    }
+    if (mode === 'rootless-k3s') {
+      const { RootlessK3sRuntime } = await import('./runtime/rootless-k3s.js')
+      return new RootlessK3sRuntime()
+    }
+    throw new Error('Select an iMessage runtime before checking it')
   }
 
   // ── dsh agent tools (registered on the local task service when present) ──
@@ -183,6 +209,31 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (choice !== 'auto' && choice !== 'native' && choice !== 'matrix') throw new Error('backend must be auto, native, or matrix')
         const saved = await setupStore.update(current => ({ ...current, backend: choice }))
         return { backend: saved.backend, selectedBackend: selectBackend(config.backend, platformOf(), saved.backend), restartRequired: true }
+      } },
+    { name: 'imessage_runtime_select', description: 'Select a Linux runtime without installing or changing infrastructure.',
+      auth: 'operator' as const,
+      schema: { type: 'object', required: ['mode'], properties: { mode: { type: 'string', enum: ['existing-kubernetes', 'rootless-k3s', 'external-matrix'] } }, additionalProperties: false },
+      handler: async (args: { mode?: unknown }) => {
+        const mode = args.mode
+        if (mode !== 'existing-kubernetes' && mode !== 'rootless-k3s' && mode !== 'external-matrix') throw new Error('invalid runtime mode')
+        const saved = await setupStore.update(current => ({ ...current, runtimeMode: mode, runtimeState: current.runtimeState === 'not-selected' ? 'not-installed' : current.runtimeState }))
+        return { runtimeMode: saved.runtimeMode, runtimeState: saved.runtimeState, changedInfrastructure: false }
+      } },
+    { name: 'imessage_runtime_check', description: 'Run non-destructive capability and health checks for the selected runtime.',
+      auth: 'operator' as const,
+      schema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => {
+        const mode = await configuredRuntimeMode()
+        if (!mode) throw new Error('Select a runtime first')
+        await setupStore.update(current => ({ ...current, runtimeMode: mode, runtimeState: 'checking', activeStep: 'runtime-check', lastError: null }))
+        try {
+          const detection = await (await runtimeForCheck()).detect()
+          const saved = await setupStore.update(current => ({ ...current, runtimeState: detection.available ? 'ready' : 'failed', activeStep: null, ...(detection.available ? { lastCompletedStep: 'runtime-check', lastError: null } : { lastError: { code: 'IMESSAGE_RUNTIME_CHECK_FAILED', message: 'Runtime requirements are not satisfied', retryable: true, at: new Date().toISOString() } }) }))
+          return { ...detection, setupRevision: saved.revision }
+        } catch (error) {
+          await setupStore.update(current => ({ ...current, runtimeState: 'failed', activeStep: null, lastError: { code: 'IMESSAGE_RUNTIME_CHECK_FAILED', message: error instanceof Error ? error.message : 'Runtime check failed', retryable: true, at: new Date().toISOString() } }))
+          throw error
+        }
       } },
     { name: 'imessage_setup_cancel', description: 'Cancel the active setup step without deleting completed work, credentials, or data.',
       auth: 'operator' as const,

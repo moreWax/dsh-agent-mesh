@@ -15,11 +15,18 @@ Updated at commit following `c1f8837`.
 - UI progress presentation and destructive reset confirmation remain Task 11.
 - Credential and workload removal semantics remain runtime-specific; cancellation intentionally preserves completed work.
 
+## Task 4 completed
+
+- `IMessageRuntime` and `ClusterRuntime` contracts.
+- Existing Kubernetes detection: kubeconfig, API, namespace/workload/Secret/ConfigMap/PVC RBAC, and StorageClass.
+- Declarative explicit-manifest application, namespace-scoped removal, and bounded logs.
+- External Matrix validation: versions, credential, room, media, search, and optional corten health.
+- Rootless k3s placeholder refuses installation until pinned Task-5 artifacts exist.
+- Runtime select/check tools update the durable setup transaction without hidden infrastructure changes.
+
 ## Next implementation order
 
-1. Task 4: `ClusterRuntime` contract and three runtime choices.
-2. Existing Kubernetes capability detection and external Matrix validation.
-3. Task 5: pinned, checksum-verified rootless k3s runtime.
+1. Task 5: pinned, checksum-verified rootless k3s runtime.
 4. Connect each executor to the persistent setup transaction boundary.
 
 npm publication remains paused.
