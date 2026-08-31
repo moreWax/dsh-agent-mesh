@@ -9,7 +9,7 @@ stdenvNoCC.mkDerivation {
     inherit src;
     fetcherVersion = 1;
     dontUnpack = true;
-    prePnpmInstall = ''
+    unpackPhase = ''
       mkdir -p "$TMPDIR/source"
       cp -R ${src}/. "$TMPDIR/source/"
       chmod -R u+w "$TMPDIR/source"
