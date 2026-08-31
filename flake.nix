@@ -16,7 +16,9 @@
           cd "$TMPDIR/work"
           test -f ${self}/scripts/check-imessage-release.mjs
           cp ${self}/scripts/check-imessage-release.mjs ./check.mjs
-          cp -R ${self}/packages ./packages
+          mkdir packages
+          cp -R ${self}/packages/dsh-imessage packages/
+          chmod -R u+w packages
           cp ${self}/package.json ./package.json
           node ./check.mjs .
           touch $out
