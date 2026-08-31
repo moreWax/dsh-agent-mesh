@@ -4,8 +4,13 @@ stdenvNoCC.mkDerivation {
   version = "0.1.0";
   inherit src;
   nativeBuildInputs = [ nodejs_22 pnpm_9 ];
+  dontUnpack = true;
   dontConfigure = true;
   buildPhase = ''
+    mkdir -p "$TMPDIR/source"
+    cp -R ${src}/. "$TMPDIR/source/"
+    chmod -R u+w "$TMPDIR/source"
+    cd "$TMPDIR/source"
     export HOME=$TMPDIR/home
     mkdir -p $HOME
     pnpm install --offline --frozen-lockfile
