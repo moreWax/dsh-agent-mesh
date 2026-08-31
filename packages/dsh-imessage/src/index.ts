@@ -235,6 +235,26 @@ export function apply(ctx: Context, config: Config = {}): void {
           throw error
         }
       } },
+    { name: 'imessage_runtime_prepare', description: 'Explicitly install/prepare and start the selected runtime. Rootless artifacts are pinned and checksum-verified; no privilege escalation or system services are used.',
+      auth: 'operator' as const,
+      schema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => {
+        const mode = await configuredRuntimeMode()
+        if (!mode) throw new Error('Select a runtime first')
+        await setupStore.update(current => ({ ...current, runtimeMode: mode, runtimeState: 'preparing', activeStep: 'runtime-prepare', lastError: null }))
+        try {
+          const runtime = await runtimeForCheck()
+          await runtime.prepare()
+          await runtime.start()
+          const status = await runtime.status()
+          if (status.health !== 'ready') throw new Error(status.detail)
+          const saved = await setupStore.update(current => ({ ...current, runtimeState: 'ready', activeStep: null, lastCompletedStep: 'runtime-prepare', lastError: null }))
+          return { ...status, setupRevision: saved.revision }
+        } catch (error) {
+          await setupStore.update(current => ({ ...current, runtimeState: 'failed', activeStep: null, lastError: { code: 'IMESSAGE_RUNTIME_PREPARE_FAILED', message: error instanceof Error ? error.message : 'Runtime preparation failed', retryable: true, at: new Date().toISOString() } }))
+          throw error
+        }
+      } },
     { name: 'imessage_setup_cancel', description: 'Cancel the active setup step without deleting completed work, credentials, or data.',
       auth: 'operator' as const,
       schema: { type: 'object', properties: {}, additionalProperties: false },

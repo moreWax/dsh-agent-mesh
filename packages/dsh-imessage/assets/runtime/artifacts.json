@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "artifacts": {
+    "linux-x64": [
+      {
+        "name": "k3s",
+        "version": "v1.36.4+k3s1",
+        "url": "https://github.com/k3s-io/k3s/releases/download/v1.36.4%2Bk3s1/k3s",
+        "sha256": "835873f37245fc615f547a2fe2af9402a347875f13fa64a1f136de644955ea3f",
+        "format": "file",
+        "executables": [
+          "k3s"
+        ]
+      },
+      {
+        "name": "rootlesskit",
+        "version": "v3.1.0",
+        "url": "https://github.com/rootless-containers/rootlesskit/releases/download/v3.1.0/rootlesskit-x86_64.tar.gz",
+        "sha256": "b1302b7395918266d561b9e3053771253f20761807e042ae80a1868d6e86b71c",
+        "format": "tar.gz",
+        "executables": [
+          "rootlesskit",
+          "rootlessctl",
+          "rootlesskit-docker-proxy"
+        ]
+      },
+      {
+        "name": "slirp4netns",
+        "version": "v1.3.5",
+        "url": "https://github.com/rootless-containers/slirp4netns/releases/download/v1.3.5/slirp4netns-x86_64",
+        "sha256": "8e54132bc80fc60d53af4b544dae63a81151774b56f129e572f7f1a2e89a57cf",
+        "format": "file",
+        "executables": [
+          "slirp4netns"
+        ]
+      }
+    ],
+    "linux-arm64": [
+      {
+        "name": "k3s",
+        "version": "v1.36.4+k3s1",
+        "url": "https://github.com/k3s-io/k3s/releases/download/v1.36.4%2Bk3s1/k3s-arm64",
+        "sha256": "c920706346d5ad4e5cd3c7bf1bb09ce71ebe07fec829e513e40f1caf98aed8bb",
+        "format": "file",
+        "executables": [
+          "k3s"
+        ]
+      },
+      {
+        "name": "rootlesskit",
+        "version": "v3.1.0",
+        "url": "https://github.com/rootless-containers/rootlesskit/releases/download/v3.1.0/rootlesskit-aarch64.tar.gz",
+        "sha256": "42d1c22a34be7bb458f9ae7363d68dd05d553422d95392b44d0be7fa1fd76bf0",
+        "format": "tar.gz",
+        "executables": [
+          "rootlesskit",
+          "rootlessctl",
+          "rootlesskit-docker-proxy"
+        ]
+      },
+      {
+        "name": "slirp4netns",
+        "version": "v1.3.5",
+        "url": "https://github.com/rootless-containers/slirp4netns/releases/download/v1.3.5/slirp4netns-aarch64",
+        "sha256": "a212e7acabf09e809b62ca62d1721ecab0d811d05c378ea0270ce29a70d986df",
+        "format": "file",
+        "executables": [
+          "slirp4netns"
+        ]
+      }
+    ]
+  }
+}

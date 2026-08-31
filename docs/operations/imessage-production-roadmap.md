@@ -30,3 +30,13 @@ Updated at commit following `c1f8837`.
 4. Connect each executor to the persistent setup transaction boundary.
 
 npm publication remains paused.
+
+## Task 5 implementation slice
+
+- Pinned k3s `v1.36.4+k3s1`, RootlessKit `v3.1.0`, and slirp4netns `v1.3.5` for Linux x64/arm64 with release SHA-256 values.
+- Atomic `.partial` downloads, pre-install checksum verification, archive traversal rejection, `0700` executables, file/directory fsync, and last-known binary preservation on failure.
+- Host checks for user namespaces, namespace limits, cgroup v2, memory, disk, and userspace-network fallback.
+- User-owned paths under `~/.local/share/dsh-imessage`; direct `k3s server --rootless`; private logs, PID identity checks, graceful stop, readiness polling, and owned-state removal.
+- Explicit `imessage_runtime_prepare`; ordinary plugin boot still performs no download, installation, or cluster launch.
+
+Live rootless clean-room acceptance and systemd-user delegation coverage remain release gates; this commit does not claim those gates passed.
