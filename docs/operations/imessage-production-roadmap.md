@@ -44,3 +44,14 @@ Live rootless clean-room acceptance and systemd-user delegation coverage remain 
 ## Task 5 live acceptance result on escha
 
 The full verified x64 runtime bundle downloaded and installed successfully in an isolated `/tmp` root. User-systemd unit rendering/install and `Delegate=yes` were exercised. Cluster launch was correctly classified as blocked on this host: Ubuntu AppArmor has `kernel.apparmor_restrict_unprivileged_userns=1`, and k3s fails its rootless child with `operation not permitted`. Detection now reports this before download/launch with an actionable existing-cluster/external-Matrix alternative. The temporary user service was disabled; no cluster remained running. This is an environmental acceptance block, not a reason for implicit privilege escalation.
+
+## Tasks 6–7 implementation slice
+
+- Added `flake.nix`, a generated `flake.lock` pinning nixpkgs revision `50ab793...`, x64/arm64 release derivations, and an immutable-asset check derivation.
+- Added deterministic Matrix bundle rendering into a private `0700` directory with `0600` manifests, generated secrets, namespace substitution, unknown-token rejection, and bundle digest.
+- Replaced experimental manifests containing `REPLACE_ME`, mutable image tags, and a fixed namespace.
+- Pinned multi-architecture Postgres 16.4 and Synapse 1.115 OCI indexes by digest.
+- Pinned corten-matrix 1.2.2 x64/arm64 release binaries by vendor-published SHA-256. Corten remains an activation-gated verified host process; no fictional OCI image or unconfigured pod is emitted.
+- Added a package/release guard for placeholders, mutable images/URLs, unknown tokens, assets inclusion, and corten descriptor consistency.
+
+Nix portable successfully generated the lock and `nix flake check --no-build` evaluated x86_64 derivations. The first check build exposed a dirty-tree source snapshot limitation before commit; the committed tree must be rebuilt as the next validation action. Reproducible double-build and arm64 Nix execution remain acceptance gates until both derivations can run in clean environments.

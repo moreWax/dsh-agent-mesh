@@ -7,7 +7,7 @@ import { runCommand, type CommandRunner } from './command.js'
 import { RuntimeError } from './errors.js'
 
 export type RuntimePlatform = 'linux-x64' | 'linux-arm64'
-export interface Artifact { name: 'k3s' | 'rootlesskit' | 'slirp4netns'; version: string; url: string; sha256: string; format: 'file' | 'tar.gz'; executables: string[] }
+export interface Artifact { name: 'k3s' | 'rootlesskit' | 'slirp4netns' | 'corten-matrix'; version: string; url: string; sha256: string; format: 'file' | 'tar.gz'; executables: string[] }
 export interface ArtifactManifest { schemaVersion: 1; artifacts: Record<RuntimePlatform, Artifact[]> }
 export interface ArtifactInstallResult { name: string; version: string; executables: string[]; sha256: string }
 export type ArtifactFetcher = (url: string, destination: string, signal?: AbortSignal) => Promise<void>

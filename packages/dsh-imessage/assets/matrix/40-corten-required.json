@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "component": "corten-matrix",
+  "version": "1.2.2",
+  "delivery": "verified-host-binary",
+  "binaryArtifact": "corten-matrix",
+  "configState": "setup-required",
+  "deployment": "not-rendered-until-activation-completes",
+  "healthCommand": [
+    "corten-matrix",
+    "status"
+  ]
+}

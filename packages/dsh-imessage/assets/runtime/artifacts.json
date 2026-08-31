@@ -33,6 +33,16 @@
         "executables": [
           "slirp4netns"
         ]
+      },
+      {
+        "name": "corten-matrix",
+        "version": "1.2.2",
+        "url": "https://github.com/lrhodin/corten-matrix/releases/download/1.2.2/corten-matrix-linux-amd64",
+        "sha256": "7430b6f1959f2867866dc0b623c9883fa6e778d9dbb9c19d0ef5819035e791b7",
+        "format": "file",
+        "executables": [
+          "corten-matrix"
+        ]
       }
     ],
     "linux-arm64": [
@@ -66,6 +76,16 @@
         "format": "file",
         "executables": [
           "slirp4netns"
+        ]
+      },
+      {
+        "name": "corten-matrix",
+        "version": "1.2.2",
+        "url": "https://github.com/lrhodin/corten-matrix/releases/download/1.2.2/corten-matrix-linux-arm64",
+        "sha256": "4bc9516f158ef995340847131a7c0293e8622df9034f1192f4c1dc5e15abdb07",
+        "format": "file",
+        "executables": [
+          "corten-matrix"
         ]
       }
     ]

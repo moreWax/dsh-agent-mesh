@@ -14,7 +14,7 @@ describe('pinned artifact manifest', () => {
   it('contains immutable HTTPS checksums for both supported architectures', async () => {
     const manifest = await loadArtifactManifest(new URL('../assets/runtime/artifacts.json', import.meta.url).pathname)
     for (const platform of ['linux-x64', 'linux-arm64'] as const) {
-      expect(manifest.artifacts[platform].map(a => a.name)).toEqual(['k3s', 'rootlesskit', 'slirp4netns'])
+      expect(manifest.artifacts[platform].map(a => a.name)).toEqual(['k3s', 'rootlesskit', 'slirp4netns', 'corten-matrix'])
       for (const artifact of manifest.artifacts[platform]) { expect(artifact.url).toMatch(/^https:\/\//); expect(artifact.url).not.toContain('latest'); expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/) }
     }
     expect(runtimePlatform('linux', 'x64')).toBe('linux-x64')
