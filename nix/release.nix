@@ -3,7 +3,14 @@ stdenvNoCC.mkDerivation {
   pname = "dsh-imessage-release";
   version = "0.1.0";
   inherit src;
-  nativeBuildInputs = [ nodejs_22 pnpm_10 ];
+  pnpmDeps = pnpm_10.fetchDeps {
+    pname = "dsh-agent-mesh-deps";
+    version = "0.1.0";
+    inherit src;
+    fetcherVersion = 1;
+    hash = lib.fakeHash;
+  };
+  nativeBuildInputs = [ nodejs_22 pnpm_10 pnpm_10.configHook ];
   dontUnpack = true;
   dontConfigure = true;
   buildPhase = ''
@@ -13,7 +20,6 @@ stdenvNoCC.mkDerivation {
     cd "$TMPDIR/source"
     export HOME=$TMPDIR/home
     mkdir -p $HOME
-    pnpm install --offline --frozen-lockfile
     pnpm --filter @morewax/dsh-imessage build
     node scripts/check-imessage-release.mjs .
     pnpm --filter @morewax/dsh-imessage pack --pack-destination $TMPDIR
