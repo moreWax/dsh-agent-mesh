@@ -1,120 +1,82 @@
-/**
- * Bridge backend for Linux: talks to corten-matrix's Matrix API for
- * iMessage send/read/search. The bridge translates between Matrix rooms
- * and iMessage chats — this backend is a thin HTTP client over that API.
- */
-import type { IMessageBackend, IMessageBackendMessage } from './interface.js'
+/** Matrix/corten bridge backend. Public errors never include Matrix responses or tokens. */
+import type { IMessageBackend, IMessageBackendMessage, IMessageBackendStatus, ReadRequest, SearchRequest, SendRequest, SendResult } from './interface.js'
+import { IMessageError } from './errors.js'
 
-export interface BridgeConfig {
-  homeserverUrl: string
-  accessToken: string
-  roomId: string
-}
+export interface BridgeConfig { homeserverUrl: string; accessToken: string; roomId: string }
+
+type MatrixEvent = { event_id?: string; type?: string; sender?: string; room_id?: string; origin_server_ts?: number; content?: { body?: string; msgtype?: string; url?: string } }
 
 export class BridgeBackend implements IMessageBackend {
+  readonly kind = 'matrix' as const
+  private currentStatus: IMessageBackendStatus = { kind: 'matrix', state: 'needs_setup', retryable: true }
   constructor(private readonly config: BridgeConfig) {}
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private url(path: string): string { return `${this.config.homeserverUrl.replace(/\/$/, '')}/_matrix/client/v3${path}` }
   private async api(method: string, path: string, body?: unknown): Promise<any> {
-    const url = `${this.config.homeserverUrl}${path}`
-    const res = await fetch(url, {
-      method,
-      headers: {
-        'authorization': `Bearer ${this.config.accessToken}`,
-        'content-type': 'application/json',
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    })
-    const data = await res.json() as Record<string, unknown>
-    if (!res.ok) throw new Error(`Matrix API ${method} ${path} failed: ${res.status} ${JSON.stringify(data)}`)
-    return data
+    let response: Response
+    try {
+      response = await fetch(this.url(path), { method, headers: { authorization: `Bearer ${this.config.accessToken}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+    } catch (cause) {
+      throw new IMessageError('IMESSAGE_MATRIX_UNAVAILABLE', 'The Matrix homeserver is unavailable', { detail: 'Could not reach the configured homeserver', fix: 'Check the homeserver URL and Matrix runtime status', retryable: true, cause })
+    }
+    if (response.status === 401 || response.status === 403) throw new IMessageError('IMESSAGE_ACCESS_DENIED', 'Matrix authentication was rejected', { detail: 'The stored Matrix credential is invalid or revoked', fix: 'Replace the Matrix credential in dsh Settings', retryable: false })
+    if (response.status === 429) throw new IMessageError('IMESSAGE_RATE_LIMITED', 'Matrix rate limit reached', { retryable: true })
+    if (!response.ok) throw new IMessageError(response.status >= 500 ? 'IMESSAGE_MATRIX_UNAVAILABLE' : 'IMESSAGE_TRANSIENT', 'The Matrix request failed', { detail: `Matrix returned HTTP ${response.status}`, retryable: response.status >= 500 })
+    return await response.json()
   }
 
-  async send(chatGuid: string, text: string, files?: string[]): Promise<{ ok: boolean; chunks?: number; error?: string }> {
+  async start(): Promise<void> {
     try {
-      const txnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      await this.api('PUT', `/rooms/${encodeURIComponent(this.config.roomId)}/send/m.room.message/${txnId}`, {
-        msgtype: 'm.text',
-        body: text,
-      })
-      for (const file of files ?? []) {
-        // attachments are sent as separate messages
-        const uploadRes = await fetch(`${this.config.homeserverUrl}/_matrix/media/v3/upload?filename=${encodeURIComponent(file.split('/').pop() ?? 'file')}`, {
-          method: 'POST',
-          headers: {
-            'authorization': `Bearer ${this.config.accessToken}`,
-            'content-type': 'application/octet-stream',
-          },
-          body: (await import('node:fs/promises')).readFile(file) as unknown as BodyInit,
-        })
-        const upload = await uploadRes.json() as { content_uri?: string }
-        if (!upload.content_uri) throw new Error('upload failed')
-        await this.api('PUT', `/rooms/${encodeURIComponent(this.config.roomId)}/send/m.room.message/${txnId}-${file}`, {
-          msgtype: 'm.file',
-          body: file.split('/').pop() ?? 'attachment',
-          url: upload.content_uri,
-        })
-      }
-      return { ok: true, chunks: 1 }
+      await this.api('GET', '/account/whoami')
+      this.currentStatus = { kind: this.kind, state: 'ready', retryable: false, lastHealthyAt: new Date().toISOString() }
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      const e = error instanceof IMessageError ? error : new IMessageError('IMESSAGE_MATRIX_UNAVAILABLE', 'The Matrix backend is unavailable', { retryable: true, cause: error })
+      this.currentStatus = { kind: this.kind, state: e.code === 'IMESSAGE_ACCESS_DENIED' ? 'needs_matrix_config' : 'degraded', detail: e.message, ...(e.fix ? { fix: e.fix } : {}), retryable: e.retryable }
+      throw e
     }
   }
+  async stop(): Promise<void> { this.currentStatus = { kind: this.kind, state: 'needs_setup', detail: 'Backend stopped', retryable: true } }
+  async status(): Promise<IMessageBackendStatus> { return { ...this.currentStatus } }
 
-  async read(options: { chatGuid?: string; limit?: number }): Promise<IMessageBackendMessage[]> {
-    const messages: IMessageBackendMessage[] = []
-    let from = ''
-    let batch = 0
-    do {
-      const params = new URLSearchParams({ dir: 'b', limit: String(options.limit ?? 100), ...(from ? { from } : {}) })
-      const data = await this.api('GET', `/rooms/${encodeURIComponent(this.config.roomId)}/messages?${params}`)
-      const chunk: any[] = Array.isArray(data.chunk) ? data.chunk : []
-      for (const event of chunk as Record<string, any>[]) {
-        if (event.type !== 'm.room.message') continue
-        messages.push({
-          rowid: messages.length + 1,
-          text: typeof event.content?.body === 'string' ? event.content.body : null,
-          sender: typeof event.sender === 'string' ? event.sender : 'unknown',
-          isFromMe: false,
-          date: typeof event.origin_server_ts === 'number' ? event.origin_server_ts : 0,
-          chatGuid: options.chatGuid ?? 'bridge',
-          chatId: 0,
-          chatTitle: null,
-          participants: [],
-        })
-      }
-      from = typeof data.end === 'string' ? data.end : ''
-      batch++
-    } while (from && batch < 5)
-    return messages.reverse()
+  async send(request: SendRequest): Promise<SendResult> {
+    const conversationId = request.conversationId || this.config.roomId
+    const txn = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    const result = await this.api('PUT', `/rooms/${encodeURIComponent(conversationId)}/send/m.room.message/${txn}`, { msgtype: 'm.text', body: request.text }) as { event_id?: string }
+    // Attachments remain explicit Matrix messages. Never include local paths in errors.
+    for (const [index, file] of (request.files ?? []).entries()) await this.sendFile(conversationId, file, `${txn}-${index}`)
+    return { ok: true, chunks: 1, messageId: result.event_id ?? `matrix:${txn}` }
   }
 
-  async search(query: string, limit?: number): Promise<IMessageBackendMessage[]> {
-    const data = await this.api('POST', '/search', {
-      search_categories: {
-        room_events: {
-          search_term: query,
-          limit: limit ?? 25,
-        },
-      },
-    }) as Record<string, unknown>
-    const categories = (data as { search_categories?: { room_events?: { results?: Array<Record<string, unknown>> } } }).search_categories
-    const results: any[] = Array.isArray(categories?.room_events?.results) ? categories.room_events.results : []
-    return results.map((r: any) => ({
-      rowid: 0,
-      text: typeof r.content === 'object' && r.content !== null ? String((r.content as Record<string, unknown>).body) : null,
-      sender: typeof r.sender === 'string' ? r.sender : 'unknown',
-      isFromMe: false,
-      date: typeof r.origin_server_ts === 'number' ? r.origin_server_ts : 0,
-      chatGuid: r.room_id ?? 'bridge',
-      chatId: 0,
-      chatTitle: null,
-      participants: [],
-    }))
+  private async sendFile(room: string, file: string, txn: string): Promise<void> {
+    const bytes = await (await import('node:fs/promises')).readFile(file)
+    let response: Response
+    try { response = await fetch(`${this.config.homeserverUrl.replace(/\/$/, '')}/_matrix/media/v3/upload`, { method: 'POST', headers: { authorization: `Bearer ${this.config.accessToken}`, 'content-type': 'application/octet-stream' }, body: bytes }) }
+    catch (cause) { throw new IMessageError('IMESSAGE_MATRIX_UNAVAILABLE', 'The attachment upload failed', { retryable: true, cause }) }
+    if (!response.ok) throw new IMessageError('IMESSAGE_TRANSIENT', 'The attachment upload failed', { detail: `Matrix returned HTTP ${response.status}`, retryable: response.status >= 500 })
+    const upload = await response.json() as { content_uri?: string }
+    if (!upload.content_uri) throw new IMessageError('IMESSAGE_TRANSIENT', 'Matrix did not return an attachment URI', { retryable: true })
+    await this.api('PUT', `/rooms/${encodeURIComponent(room)}/send/m.room.message/${txn}`, { msgtype: 'm.file', body: file.split('/').pop() ?? 'attachment', url: upload.content_uri })
   }
 
-  // IMessageBackend compliance
-  async send2(chatGuid: string, text: string, files?: string[]): Promise<{ ok: boolean; chunks?: number; error?: string }> {
-    return this.send(chatGuid, text, files)
+  async read(request: ReadRequest): Promise<IMessageBackendMessage[]> {
+    const room = request.conversationId || this.config.roomId
+    const params = new URLSearchParams({ dir: 'b', limit: String(request.limit ?? 100) })
+    const data = await this.api('GET', `/rooms/${encodeURIComponent(room)}/messages?${params}`) as { chunk?: MatrixEvent[] }
+    return (Array.isArray(data.chunk) ? data.chunk : []).filter(e => e.type === 'm.room.message').map((e, i) => this.message(e, room, i)).reverse()
+  }
+
+  async search(request: SearchRequest): Promise<IMessageBackendMessage[]> {
+    const data = await this.api('POST', '/search', { search_categories: { room_events: { search_term: request.query, filter: { rooms: [this.config.roomId] }, limit: request.limit ?? 25 } } }) as { search_categories?: { room_events?: { results?: Array<{ result?: MatrixEvent }> } } }
+    return (data.search_categories?.room_events?.results ?? []).map((item, i) => this.message(item.result ?? {}, this.config.roomId, i))
+  }
+
+  private message(event: MatrixEvent, room: string, index: number): IMessageBackendMessage {
+    const date = event.origin_server_ts ?? 0
+    const id = event.event_id ?? `matrix:${date}:${index}`
+    const sender = event.sender ?? 'unknown'
+    const attachmentPath = event.content?.url
+    return { id, backend: this.kind, conversationId: event.room_id ?? room, sender, direction: 'inbound', timestamp: new Date(date).toISOString(), text: event.content?.body ?? null,
+      attachments: attachmentPath ? [{ uri: attachmentPath, ...(event.content?.body ? { name: event.content.body } : {}) }] : [], attribution: { backend: this.kind, backendMessageId: id, backendSender: sender, matrixRoomId: event.room_id ?? room, matrixSender: sender },
+      rowid: index, isFromMe: false, date, chatGuid: event.room_id ?? room, chatId: 0, chatTitle: null, participants: [], ...(attachmentPath ? { attachmentPath } : {}) }
   }
 }

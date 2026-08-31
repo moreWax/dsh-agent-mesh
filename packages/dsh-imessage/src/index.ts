@@ -8,10 +8,10 @@
  * - inbound as mesh events: new messages from allowlisted handles land in
  *   the fleet channel as system events (sealed notification fan-out)
  *
- * macOS only. Two one-time TCC permissions gate reality, and the plugin
- * reports them honestly instead of crashing: Full Disk Access (chat.db
- * reads) and Automation (Messages.app sends). macOS pops the prompts; the
- * fix text names the exact System Settings pane.
+ * Backends are platform-isolated: macOS uses read-only chat.db + Messages,
+ * while Linux uses the explicitly configured Matrix/corten bridge. Plugin
+ * boot never installs or deploys infrastructure. Backend status and errors
+ * name the exact setup or permission action without exposing credentials.
  */
 import { homedir } from 'node:os'
 import { existsSync } from 'node:fs'
@@ -23,10 +23,8 @@ import { JsonFileView, toolPayload, type AgentMeshFace, type TaskServiceToolMoun
 import { keyTools } from './key-tools.js'
 import { createBackend, selectBackend, type BackendChoice } from './backends/select.js'
 import type { IMessageBackend } from './backends/interface.js'
-import { openMessagesDb, currentWatermark, fetchSince, fetchHistory, searchMessages, chatParticipants, type IMessage } from './db.js'
-import { sendIMessage } from './sender.js'
+import { NativeBackend } from './backends/native.js'
 import { defaultAccess, isAllowed, type AccessFile } from './access.js'
-import type { DatabaseSync } from 'node:sqlite'
 
 export const name = 'dsh-imessage'
 export const inject = ['agentMesh', 'credentials']
@@ -81,9 +79,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   const selectedBackend = selectBackend(config.backend ?? 'auto')
   let backend: IMessageBackend | undefined
   let backendError: string | undefined
-  let db: DatabaseSync | undefined
   if (selectedBackend === 'native') {
-    try { backend = createBackend({ choice: 'native', native: { dbPath, allowSms } }) }
+    try { backend = createBackend({ choice: 'native', native: { dbPath, allowSms } }); void backend.start().catch(error => { backendError = error instanceof Error ? error.message : String(error) }) }
     catch (error) { backendError = error instanceof Error ? error.message : String(error) }
   } else if (selectedBackend === 'matrix') {
     // Matrix access tokens are references, never values in the profile config.
@@ -91,29 +88,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     // task-service injection below, where the same resolver is available.
     const matrix = config.matrix
     if (matrix?.homeserverUrl && matrix.accessTokenRef && matrix.roomId) {
-      void (ctx as Context & { credentials: { resolve(ref: unknown): Promise<{ value?: string } | undefined> } }).credentials.resolve(credentialRef(matrix.accessTokenRef)).then((resolved: { value?: string } | undefined) => {
-        if (resolved?.value) backend = createBackend({ choice: 'matrix', matrix: { homeserverUrl: matrix.homeserverUrl!, accessToken: resolved.value, roomId: matrix.roomId! } })
+      void (ctx as Context & { credentials: { resolve(ref: unknown): Promise<{ value?: string } | undefined> } }).credentials.resolve(credentialRef(matrix.accessTokenRef)).then(async (resolved: { value?: string } | undefined) => {
+        if (resolved?.value) { backend = createBackend({ choice: 'matrix', matrix: { homeserverUrl: matrix.homeserverUrl!, accessToken: resolved.value, roomId: matrix.roomId! } }); await backend.start() }
         else backendError = 'Matrix access token is not provisioned — store it through dsh credentials'
       }).catch((error: unknown) => { backendError = error instanceof Error ? error.message : String(error) })
     } else backendError = 'Linux iMessage backend needs Matrix homeserver URL, access-token reference, and room ID'
   } else backendError = `iMessage is unsupported on this platform (${process.platform})`
 
-  const openDb = (): DatabaseSync => {
-    if (selectedBackend !== 'native' || !backend) throw new Error(backendError ?? 'native iMessage backend is unavailable')
-    if (db) return db
-    try { db = openMessagesDb(dbPath); return db }
-    catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(/authorization denied|not authorized|EPERM|EACCES/i.test(message) ? FDA_FIX : `cannot open Messages database: ${message}`)
-    }
-  }
   const requireBackend = (): IMessageBackend => backend ?? (() => { throw new Error(backendError ?? 'iMessage backend is still starting') })()
-  const withParticipants = (messages: IMessage[]): IMessage[] => {
-    if (selectedBackend !== 'native' || messages.length === 0) return messages
-    const map = chatParticipants(openDb(), [...new Set(messages.map(m => m.chatId))])
-    for (const m of messages) m.participants = map.get(m.chatId) ?? []
-    return messages
-  }
 
   // ── dsh agent tools (registered on the local task service when present) ──
   const tools = [
@@ -126,14 +108,14 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (!chatGuid || !text.trim()) throw new Error('chat_guid and text are required')
         const files = Array.isArray(args.files) ? args.files.filter((f): f is string => typeof f === 'string') : []
         const signature = config.signature ?? ''
-        return await requireBackend().send(chatGuid, text + signature, files)
+        return await requireBackend().send({ conversationId: chatGuid, text: text + signature, files })
       } },
     { name: 'imessage_read', description: 'Recent iMessage history as threads (all allowlisted chats, or one chat_guid). Oldest-first per chat.',
       auth: 'capability' as const, requiredScopes: ['tasks'],
       schema: { type: 'object', properties: { chat_guid: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: false },
       handler: async (args: { chat_guid?: unknown; limit?: unknown }) => {
         const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 200) : 100
-        const messages = await requireBackend().read({ ...(typeof args.chat_guid === 'string' ? { chatGuid: args.chat_guid } : {}), limit })
+        const messages = await requireBackend().read({ ...(typeof args.chat_guid === 'string' ? { conversationId: args.chat_guid } : {}), limit })
         const ac = await access.get()
         return { messages: messages.filter(m => isAllowed(m, ac, ownHandles)) }
       } },
@@ -144,7 +126,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const query = typeof args.query === 'string' ? args.query.trim() : ''
         if (!query) throw new Error('query is required')
         const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 50) : 25
-        const messages = await requireBackend().search(query, limit)
+        const messages = await requireBackend().search({ query, limit })
         const ac = await access.get()
         return { messages: messages.filter(m => isAllowed(m, ac, ownHandles)) }
       } },
@@ -169,7 +151,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     { name: 'imessage_status', description: 'Show the selected iMessage backend and setup state.',
       auth: 'capability' as const, requiredScopes: ['tasks'],
       schema: { type: 'object', properties: {}, additionalProperties: false },
-      handler: async () => ({ backend: selectedBackend, state: backend ? 'ready' : process.platform === 'linux' ? 'needs_setup' : 'degraded', error: backendError, hardwareKeyPresent: process.platform !== 'linux' || validateHardwareKey(stateDir) }) },
+      handler: async () => backend ? await backend.status() : ({ kind: selectedBackend, state: process.platform === 'linux' ? 'needs_setup' : 'unavailable', detail: backendError, retryable: true, hardwareKeyPresent: process.platform !== 'linux' || validateHardwareKey(stateDir) }) },
     { name: 'imessage_setup_status', description: 'Show Linux Matrix/k3s setup requirements; read-only and safe to run at any time.',
       auth: 'capability' as const, requiredScopes: ['tasks'],
       schema: { type: 'object', properties: {}, additionalProperties: false },
@@ -192,13 +174,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     let watermark = -1 // -1 = initialize to MAX(ROWID) on first tick (no replay)
     timer = setInterval(() => void (async () => {
       try {
-        const database = openDb()
-        if (watermark < 0) { watermark = currentWatermark(database); return }
-        const fresh = fetchSince(database, watermark, allowSms)
+        if (!(backend instanceof NativeBackend)) return
+        if (watermark < 0) { watermark = backend.getWatermark(); return }
+        const fresh = backend.fetchSince(watermark)
         if (fresh.length === 0) return
         watermark = fresh[fresh.length - 1]!.rowid
         const ac = await access.get()
-        const allowed = withParticipants(fresh).filter(m => isAllowed(m, ac, ownHandles))
+        const allowed = (await backend.decorate(fresh)).filter(m => isAllowed(m, ac, ownHandles))
         if (allowed.length === 0) return
         const chat = (ctx as unknown as { get?(name: string): unknown }).get?.('agentMeshChat') as { postSystem?(text: string, meta?: unknown): void } | undefined
         for (const m of allowed) {
@@ -212,7 +194,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   ctx.effect(() => () => {
     if (timer) clearInterval(timer)
-    db?.close()
+    void backend?.stop()
   })
 
   // Boot-time hardware key check (Linux only)

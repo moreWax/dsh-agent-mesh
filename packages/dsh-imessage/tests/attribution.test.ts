@@ -1,21 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { toolPayload } from '@morewax/sam-mesh'
+import type { IMessageBackendMessage } from '../src/backends/interface.js'
 
-describe('imessage attribution (Task 5)', () => {
-  it('both backends produce the same IMessageBackendMessage shape', () => {
-    const nativeMsg = {
-      rowid: 1, text: 'hello', sender: '+15551112222', isFromMe: false,
-      date: 1700000000000, chatGuid: 'iMessage;-;+15551112222', chatId: 1,
-      chatTitle: null, participants: ['+15551112222'],
+function message(backend: 'native' | 'matrix'): IMessageBackendMessage {
+  return { id: `${backend}:1`, backend, conversationId: 'conversation', sender: 'friend', direction: 'inbound', timestamp: new Date(0).toISOString(), text: 'hello', attachments: [], attribution: { backend, backendMessageId: '1' }, rowid: 1, isFromMe: false, date: 0, chatGuid: 'conversation', chatId: 1, chatTitle: null, participants: ['friend'] }
+}
+
+describe('backend-neutral attribution', () => {
+  it('requires equivalent identity, direction and backend attribution', () => {
+    for (const backend of ['native', 'matrix'] as const) {
+      const value = message(backend)
+      expect(value.attribution.backend).toBe(backend)
+      expect(value.conversationId).toBe(value.chatGuid)
+      expect(value.direction).toBe('inbound')
+      expect(value.timestamp).toMatch(/Z$/)
     }
-    const bridgeMsg = {
-      rowid: 0, text: 'hello', sender: '@friend:matrix.org', isFromMe: false,
-      date: 1700000000000, chatGuid: 'bridge', chatId: 0,
-      chatTitle: null, participants: [],
-    }
-    // both have the same keys
-    expect(Object.keys(nativeMsg).sort()).toEqual(Object.keys(bridgeMsg).sort())
-    // both carry the same semantic content
-    expect(nativeMsg.text).toBe(bridgeMsg.text)
   })
 })
