@@ -1,9 +1,9 @@
-{ lib, stdenvNoCC, nodejs_22, pnpm_9, src }:
+{ lib, stdenvNoCC, nodejs_22, pnpm_10, src }:
 stdenvNoCC.mkDerivation {
   pname = "dsh-imessage-release";
   version = "0.1.0";
   inherit src;
-  nativeBuildInputs = [ nodejs_22 pnpm_9 ];
+  nativeBuildInputs = [ nodejs_22 pnpm_10 ];
   dontUnpack = true;
   dontConfigure = true;
   buildPhase = ''
