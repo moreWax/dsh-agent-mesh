@@ -40,3 +40,7 @@ npm publication remains paused.
 - Explicit `imessage_runtime_prepare`; ordinary plugin boot still performs no download, installation, or cluster launch.
 
 Live rootless clean-room acceptance and systemd-user delegation coverage remain release gates; this commit does not claim those gates passed.
+
+## Task 5 live acceptance result on escha
+
+The full verified x64 runtime bundle downloaded and installed successfully in an isolated `/tmp` root. User-systemd unit rendering/install and `Delegate=yes` were exercised. Cluster launch was correctly classified as blocked on this host: Ubuntu AppArmor has `kernel.apparmor_restrict_unprivileged_userns=1`, and k3s fails its rootless child with `operation not permitted`. Detection now reports this before download/launch with an actionable existing-cluster/external-Matrix alternative. The temporary user service was disabled; no cluster remained running. This is an environmental acceptance block, not a reason for implicit privilege escalation.

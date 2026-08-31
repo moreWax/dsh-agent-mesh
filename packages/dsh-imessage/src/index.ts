@@ -48,7 +48,7 @@ export interface Config {
   /** auto = native on macOS, Matrix/corten-matrix on Linux. */
   backend?: BackendChoice
   matrix?: { homeserverUrl?: string; accessTokenRef?: string; roomId?: string; bridgeHealthUrl?: string }
-  runtime?: { mode?: 'existing-kubernetes' | 'rootless-k3s' | 'external-matrix'; kubeconfig?: string; namespace?: string }
+  runtime?: { mode?: 'existing-kubernetes' | 'rootless-k3s' | 'external-matrix'; kubeconfig?: string; namespace?: string; lifecycle?: 'auto' | 'systemd-user' | 'direct' }
 }
 export const Config: z<Config> = z.object({
   dbPath: z.string().default('~/Library/Messages/chat.db'),
@@ -61,7 +61,7 @@ export const Config: z<Config> = z.object({
   fleetTools: z.boolean().default(true),
   backend: z.union(['auto', 'native', 'matrix']).default('auto'),
   matrix: z.object({ homeserverUrl: z.string(), accessTokenRef: z.string(), roomId: z.string(), bridgeHealthUrl: z.string() }),
-  runtime: z.object({ mode: z.union(['existing-kubernetes', 'rootless-k3s', 'external-matrix']), kubeconfig: z.string(), namespace: z.string() }),
+  runtime: z.object({ mode: z.union(['existing-kubernetes', 'rootless-k3s', 'external-matrix']), kubeconfig: z.string(), namespace: z.string(), lifecycle: z.union(['auto', 'systemd-user', 'direct']) }),
 }) as unknown as z<Config>
 
 const FDA_FIX = 'Full Disk Access missing — System Settings → Privacy & Security → Full Disk Access → allow your terminal (or the dsh host app)'
@@ -137,7 +137,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
     if (mode === 'rootless-k3s') {
       const { RootlessK3sRuntime } = await import('./runtime/rootless-k3s.js')
-      return new RootlessK3sRuntime()
+      return new RootlessK3sRuntime({ baseDir: setupDir, lifecycle: config.runtime?.lifecycle ?? 'auto' })
     }
     throw new Error('Select an iMessage runtime before checking it')
   }

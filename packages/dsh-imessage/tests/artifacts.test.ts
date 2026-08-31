@@ -30,6 +30,16 @@ describe('pinned artifact manifest', () => {
     expect(await (await import('node:fs/promises')).readdir(join(root, 'downloads'))).toEqual([])
   })
 
+  it('cleans an interrupted download and succeeds on retry', async () => {
+    const root = await dir(); const bytes = Buffer.from('retry executable'); let attempts = 0
+    const fetcher: ArtifactFetcher = async (_url, destination) => { attempts++; if (attempts === 1) { await writeFile(destination, 'partial'); throw new Error('interrupted') }; await writeFile(destination, bytes) }
+    const installer = new ArtifactInstaller({ downloadsDir: join(root, 'downloads'), binDir: join(root, 'bin') }, fetcher)
+    const artifact = { name: 'k3s' as const, version: 'v1', url: 'https://example.test/k3s', sha256: (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex'), format: 'file' as const, executables: ['k3s'] }
+    await expect(installer.install(artifact)).rejects.toThrow('interrupted')
+    expect(await (await import('node:fs/promises')).readdir(join(root, 'downloads'))).toEqual([])
+    await expect(installer.install(artifact)).resolves.toMatchObject({ name: 'k3s' })
+  })
+
   it('rejects a checksum mismatch without replacing an installed executable', async () => {
     const root = await dir(); const bin = join(root, 'bin'); await (await import('node:fs/promises')).mkdir(bin); await writeFile(join(bin, 'k3s'), 'old'); await chmod(join(bin, 'k3s'), 0o700)
     const fetcher: ArtifactFetcher = async (_url, destination) => { await writeFile(destination, 'tampered') }
@@ -48,12 +58,17 @@ describe('pinned artifact manifest', () => {
 })
 
 describe('rootless host capability detection', () => {
+  it('checks the nearest existing parent for a not-yet-created runtime directory', async () => {
+    const root = await dir()
+    const checks = await detectRootlessCapabilities({ homeDir: join(root, 'not-created/nested'), minimumBytes: 1, minimumMemoryBytes: 1 })
+    expect(checks.find(check => check.name === 'disk-space')).toMatchObject({ ok: true })
+  })
   it('reports disabled user namespaces, cgroup, memory, and disk actionably', async () => {
     const root = await dir(); const proc = join(root, 'proc'); const fs = await import('node:fs/promises')
     await fs.mkdir(join(proc, 'sys/kernel'), { recursive: true }); await fs.mkdir(join(proc, 'sys/user'), { recursive: true })
-    await writeFile(join(proc, 'sys/kernel/unprivileged_userns_clone'), '0'); await writeFile(join(proc, 'sys/user/max_user_namespaces'), '0'); await writeFile(join(proc, 'filesystems'), 'nodev sysfs'); await writeFile(join(proc, 'meminfo'), 'MemAvailable: 1024 kB')
+    await writeFile(join(proc, 'sys/kernel/unprivileged_userns_clone'), '0'); await writeFile(join(proc, 'sys/kernel/apparmor_restrict_unprivileged_userns'), '1'); await writeFile(join(proc, 'sys/user/max_user_namespaces'), '0'); await writeFile(join(proc, 'filesystems'), 'nodev sysfs'); await writeFile(join(proc, 'meminfo'), 'MemAvailable: 1024 kB')
     const checks = await detectRootlessCapabilities({ homeDir: root, procDir: proc, filesystem: (async () => ({ bavail: 1, bsize: 1 })) as unknown as typeof import('node:fs/promises')['statfs'] })
-    expect(checks.filter(c => c.required && !c.ok).map(c => c.name)).toEqual(['user-namespaces', 'user-namespace-limit', 'cgroup-v2', 'memory', 'disk-space'])
+    expect(checks.filter(c => c.required && !c.ok).map(c => c.name)).toEqual(['user-namespaces', 'apparmor-userns', 'user-namespace-limit', 'cgroup-v2', 'memory', 'disk-space'])
     expect(checks.filter(c => c.required && !c.ok).every(c => Boolean(c.fix))).toBe(true)
   })
 })
