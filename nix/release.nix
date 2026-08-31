@@ -8,6 +8,13 @@ stdenvNoCC.mkDerivation {
     version = "0.1.0";
     inherit src;
     fetcherVersion = 1;
+    dontUnpack = true;
+    prePnpmInstall = ''
+      mkdir -p "$TMPDIR/source"
+      cp -R ${src}/. "$TMPDIR/source/"
+      chmod -R u+w "$TMPDIR/source"
+      cd "$TMPDIR/source"
+    '';
     hash = lib.fakeHash;
   };
   nativeBuildInputs = [ nodejs_22 pnpm_10 pnpm_10.configHook ];
