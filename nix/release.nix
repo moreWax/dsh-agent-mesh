@@ -11,7 +11,7 @@ let
     version = "0.1.0";
     src = sourceTar;
     fetcherVersion = 1;
-    pnpmInstallFlags = [ "--store-dir=$TMPDIR/pnpm-store" ];
+    pnpmInstallFlags = [ "--store-dir=.pnpm-store" ];
     hash = lib.fakeHash;
   };
 in stdenvNoCC.mkDerivation {
