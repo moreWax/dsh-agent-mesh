@@ -12,8 +12,8 @@
       });
       checks = forAllSystems (pkgs: {
         matrix-assets = pkgs.runCommand "dsh-imessage-matrix-assets" { nativeBuildInputs = [ pkgs.nodejs_22 ]; } ''
-          mkdir work
-          cd work
+          mkdir -p "$TMPDIR/work"
+          cd "$TMPDIR/work"
           test -f ${self}/scripts/check-imessage-release.mjs
           cp ${self}/scripts/check-imessage-release.mjs ./check.mjs
           cp -R ${self}/packages ./packages
