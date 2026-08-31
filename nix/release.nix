@@ -1,7 +1,10 @@
 { lib, stdenvNoCC, nodejs_22, pnpm_10, gnutar, gzip, runCommand, src }:
 let
   sourceTar = runCommand "dsh-agent-mesh-source.tar.gz" { nativeBuildInputs = [ gnutar gzip ]; } ''
-    tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -czf $out -C ${src} .
+    mkdir source
+    cp -R ${src}/. source/
+    chmod -R u+w source
+    tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -czf $out source
   '';
   pnpmDeps = pnpm_10.fetchDeps {
     pname = "dsh-agent-mesh-deps";
