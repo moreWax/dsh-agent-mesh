@@ -1,22 +1,19 @@
-{ lib, stdenvNoCC, nodejs_22, pnpm_10, src }:
-stdenvNoCC.mkDerivation {
-  pname = "dsh-imessage-release";
-  version = "0.1.0";
-  inherit src;
+{ lib, stdenvNoCC, nodejs_22, pnpm_10, gnutar, gzip, runCommand, src }:
+let
+  sourceTar = runCommand "dsh-agent-mesh-source.tar.gz" { nativeBuildInputs = [ gnutar gzip ]; } ''
+    tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -czf $out -C ${src} .
+  '';
   pnpmDeps = pnpm_10.fetchDeps {
     pname = "dsh-agent-mesh-deps";
     version = "0.1.0";
-    inherit src;
+    src = sourceTar;
     fetcherVersion = 1;
-    dontUnpack = true;
-    unpackPhase = ''
-      mkdir -p "$TMPDIR/source"
-      cp -R ${src}/. "$TMPDIR/source/"
-      chmod -R u+w "$TMPDIR/source"
-      cd "$TMPDIR/source"
-    '';
     hash = lib.fakeHash;
   };
+in stdenvNoCC.mkDerivation {
+  pname = "dsh-imessage-release";
+  version = "0.1.0";
+  inherit src pnpmDeps;
   nativeBuildInputs = [ nodejs_22 pnpm_10 pnpm_10.configHook ];
   dontUnpack = true;
   dontConfigure = true;
