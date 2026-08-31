@@ -14,7 +14,9 @@
         matrix-assets = pkgs.runCommand "dsh-imessage-matrix-assets" { nativeBuildInputs = [ pkgs.nodejs_22 ]; } ''
           test -f ${self}/scripts/check-imessage-release.mjs
           cp ${self}/scripts/check-imessage-release.mjs ./check.mjs
-          node ./check.mjs ${self}
+          cp -R ${self}/packages ./packages
+          cp ${self}/package.json ./package.json
+          node ./check.mjs .
           touch $out
         '';
       });
