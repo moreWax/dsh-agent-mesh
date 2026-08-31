@@ -8,14 +8,17 @@ iMessage on Linux via the corten-matrix bridge (rustpush). One-time Mac access r
 2. Unzip and run on any Mac (Intel or Apple Silicon)
 3. It prints a validation blob — save this
 
-## Step 2: Deploy corten-matrix (on escha or your Linux server)
+## Step 2: Choose a Matrix runtime (explicit first-run action)
 
-```bash
-curl -sL https://github.com/lrhodin/corten-matrix/releases/download/1.2.2/corten-matrix-linux-amd64 -o corten-matrix
-chmod +x corten-matrix
-./corten-matrix setup   # follow the interactive prompts
-# paste the hardware key blob when asked for validation data
-```
+In dsh Settings → iMessage → Linux setup, choose one of:
+
+- **Use an existing Kubernetes cluster**
+- **Create a private rootless k3s cluster** (user-owned; no sudo)
+- **Use an external Matrix server**
+
+The plugin downloads only pinned, checksum-verified artifacts after explicit confirmation. It resumes after restart and never runs `curl | sh` or silently escalates privileges.
+
+For a manual bridge install, download corten-matrix v1.2.2 from its release page and run `corten-matrix setup`; the plugin then connects using Matrix credentials stored by reference.
 
 ## Step 3: Install the dsh-imessage plugin
 
@@ -41,3 +44,7 @@ sam-mesh doctor
 # the chat should show imessage messages
 # the fleet channel should show system events
 ```
+
+## Current support boundary
+
+Linux deployment is experimental until the rootless runtime and fresh clean-room acceptance matrix pass. The macOS native backend is independent and does not require k3s or Matrix.

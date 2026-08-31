@@ -14,11 +14,15 @@
  * fix text names the exact System Settings pane.
  */
 import { homedir } from 'node:os'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { JsonFileView, toolPayload, type AgentMeshFace, type TaskServiceToolMount } from '@morewax/sam-mesh'
 import { keyTools } from './key-tools.js'
+import { createBackend, selectBackend, type BackendChoice } from './backends/select.js'
+import type { IMessageBackend } from './backends/interface.js'
 import { openMessagesDb, currentWatermark, fetchSince, fetchHistory, searchMessages, chatParticipants, type IMessage } from './db.js'
 import { sendIMessage } from './sender.js'
 import { defaultAccess, isAllowed, type AccessFile } from './access.js'
@@ -39,6 +43,9 @@ export interface Config {
   ownHandles?: string[]
   /** Fleet mount: also expose the tools on the mesh task service (default true). */
   fleetTools?: boolean
+  /** auto = native on macOS, Matrix/corten-matrix on Linux. */
+  backend?: BackendChoice
+  matrix?: { homeserverUrl?: string; accessTokenRef?: string; roomId?: string }
 }
 export const Config: z<Config> = z.object({
   dbPath: z.string().default('~/Library/Messages/chat.db'),
@@ -48,60 +55,61 @@ export const Config: z<Config> = z.object({
   signature: z.string().default('\nSent via the mesh'),
   ownHandles: z.array(z.string()).default([]),
   fleetTools: z.boolean().default(true),
+  backend: z.union(['auto', 'native', 'matrix']).default('auto'),
+  matrix: z.object({ homeserverUrl: z.string(), accessTokenRef: z.string(), roomId: z.string() }),
 }) as unknown as z<Config>
 
 const FDA_FIX = 'Full Disk Access missing — System Settings → Privacy & Security → Full Disk Access → allow your terminal (or the dsh host app)'
+
+function validateHardwareKey(stateDir: string): boolean {
+  if (process.platform !== 'linux') return true
+  return existsSync(join(stateDir, 'hardware-key.bin'))
+}
 
 export function apply(ctx: Context, config: Config = {}): void {
   const dbPath = (config.dbPath ?? '~/Library/Messages/chat.db').replace(/^~(?=\/)/, homedir())
   const stateDir = (config.stateDir ?? '~/.config/dsh-imessage').replace(/^~(?=\/)/, homedir())
 
-  // ── k3s deployment (Linux only): the plugin carries its own k8s manifests ──
-  // On Linux, the iMessage backend needs corten-matrix + Conduit + Synapse.
-  // The plugin bootstraps a single-node k3s cluster (if none exists) and
-  // deploys all three as workloads. On macOS, none of this is needed.
-  if (process.platform === 'linux') {
-    void (async () => {
-      try {
-        const { ensureCluster, deployStack, waitForHealthy } = await import('./k3s-deploy.js')
-        console.info('[dsh-imessage] ensuring k3s cluster...')
-        await ensureCluster()
-        console.info('[dsh-imessage] deploying matrix stack...')
-        await deployStack('imessage')
-        await waitForHealthy('imessage')
-        console.info('[dsh-imessage] matrix stack healthy')
-      } catch (error) {
-        console.error(`[dsh-imessage] k3s deployment failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    })()
-  }
+  // Linux setup is explicit and resumable — never install k3s or launch
+  // workloads merely because a dsh profile booted. The UI/tools call the
+  // setup action after the user chooses an existing cluster or private
+  // rootless k3s. This keeps plugin installation side-effect-free.
   const allowSms = config.allowSms === true
   const ownHandles = (config.ownHandles ?? []).map(h => h.trim().toLowerCase())
   const access = new JsonFileView<AccessFile>(join(stateDir, 'access.json'), raw => JSON.parse(raw) as AccessFile, defaultAccess(), async p => (await import('node:fs/promises')).stat(p))
 
+  const selectedBackend = selectBackend(config.backend ?? 'auto')
+  let backend: IMessageBackend | undefined
+  let backendError: string | undefined
   let db: DatabaseSync | undefined
-  let dbError: string | undefined
-    // Hardware key check (Linux only): the extraction tool runs on macOS and
-  // produces a validation blob. Without it, the bridge cannot authenticate.
-  const validateHardwareKey = (): boolean => {
-    if (process.platform !== 'linux') return true // macOS has native access
-    const keyPath = join(stateDir, 'hardware-key.bin')
-    return require('node:fs').existsSync(keyPath)
-  }
+  if (selectedBackend === 'native') {
+    try { backend = createBackend({ choice: 'native', native: { dbPath, allowSms } }) }
+    catch (error) { backendError = error instanceof Error ? error.message : String(error) }
+  } else if (selectedBackend === 'matrix') {
+    // Matrix access tokens are references, never values in the profile config.
+    // The credential resolver is async; backend construction happens after the
+    // task-service injection below, where the same resolver is available.
+    const matrix = config.matrix
+    if (matrix?.homeserverUrl && matrix.accessTokenRef && matrix.roomId) {
+      void (ctx as Context & { credentials: { resolve(ref: unknown): Promise<{ value?: string } | undefined> } }).credentials.resolve(credentialRef(matrix.accessTokenRef)).then((resolved: { value?: string } | undefined) => {
+        if (resolved?.value) backend = createBackend({ choice: 'matrix', matrix: { homeserverUrl: matrix.homeserverUrl!, accessToken: resolved.value, roomId: matrix.roomId! } })
+        else backendError = 'Matrix access token is not provisioned — store it through dsh credentials'
+      }).catch((error: unknown) => { backendError = error instanceof Error ? error.message : String(error) })
+    } else backendError = 'Linux iMessage backend needs Matrix homeserver URL, access-token reference, and room ID'
+  } else backendError = `iMessage is unsupported on this platform (${process.platform})`
 
   const openDb = (): DatabaseSync => {
+    if (selectedBackend !== 'native' || !backend) throw new Error(backendError ?? 'native iMessage backend is unavailable')
     if (db) return db
-    try {
-      db = openMessagesDb(dbPath)
-      return db
-    } catch (error) {
-      dbError = error instanceof Error ? error.message : String(error)
-      throw new Error(/authorization denied|not authorized|EPERM|EACCES/i.test(dbError) ? FDA_FIX : `cannot open Messages database: ${dbError}`)
+    try { db = openMessagesDb(dbPath); return db }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(/authorization denied|not authorized|EPERM|EACCES/i.test(message) ? FDA_FIX : `cannot open Messages database: ${message}`)
     }
   }
-
+  const requireBackend = (): IMessageBackend => backend ?? (() => { throw new Error(backendError ?? 'iMessage backend is still starting') })()
   const withParticipants = (messages: IMessage[]): IMessage[] => {
-    if (messages.length === 0) return messages
+    if (selectedBackend !== 'native' || messages.length === 0) return messages
     const map = chatParticipants(openDb(), [...new Set(messages.map(m => m.chatId))])
     for (const m of messages) m.participants = map.get(m.chatId) ?? []
     return messages
@@ -118,14 +126,14 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (!chatGuid || !text.trim()) throw new Error('chat_guid and text are required')
         const files = Array.isArray(args.files) ? args.files.filter((f): f is string => typeof f === 'string') : []
         const signature = config.signature ?? ''
-        return await sendIMessage(chatGuid, text + signature, files)
+        return await requireBackend().send(chatGuid, text + signature, files)
       } },
     { name: 'imessage_read', description: 'Recent iMessage history as threads (all allowlisted chats, or one chat_guid). Oldest-first per chat.',
       auth: 'capability' as const, requiredScopes: ['tasks'],
       schema: { type: 'object', properties: { chat_guid: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: false },
       handler: async (args: { chat_guid?: unknown; limit?: unknown }) => {
         const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 200) : 100
-        const messages = withParticipants(fetchHistory(openDb(), { ...(typeof args.chat_guid === 'string' ? { chatGuid: args.chat_guid } : {}), limit, allowSms }))
+        const messages = await requireBackend().read({ ...(typeof args.chat_guid === 'string' ? { chatGuid: args.chat_guid } : {}), limit })
         const ac = await access.get()
         return { messages: messages.filter(m => isAllowed(m, ac, ownHandles)) }
       } },
@@ -136,7 +144,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const query = typeof args.query === 'string' ? args.query.trim() : ''
         if (!query) throw new Error('query is required')
         const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 50) : 25
-        const messages = withParticipants(searchMessages(openDb(), query, limit, allowSms))
+        const messages = await requireBackend().search(query, limit)
         const ac = await access.get()
         return { messages: messages.filter(m => isAllowed(m, ac, ownHandles)) }
       } },
@@ -158,6 +166,14 @@ export function apply(ctx: Context, config: Config = {}): void {
         await writeFile(path, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 })
         return { allow: next.allow }
       } },
+    { name: 'imessage_status', description: 'Show the selected iMessage backend and setup state.',
+      auth: 'capability' as const, requiredScopes: ['tasks'],
+      schema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => ({ backend: selectedBackend, state: backend ? 'ready' : process.platform === 'linux' ? 'needs_setup' : 'degraded', error: backendError, hardwareKeyPresent: process.platform !== 'linux' || validateHardwareKey(stateDir) }) },
+    { name: 'imessage_setup_status', description: 'Show Linux Matrix/k3s setup requirements; read-only and safe to run at any time.',
+      auth: 'capability' as const, requiredScopes: ['tasks'],
+      schema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => ({ platform: process.platform, backend: selectedBackend, hardwareKeyPresent: validateHardwareKey(stateDir), matrixConfigured: Boolean(config.matrix?.homeserverUrl && config.matrix?.accessTokenRef && config.matrix?.roomId), runtime: 'explicit setup required — no k3s install occurs during plugin boot' }) },
   ]
 
   if (config.fleetTools !== false) {
@@ -172,7 +188,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // ── inbound watcher: poll chat.db, deliver allowlisted new messages as
   // fleet-channel system events through the chat plugin's poster. ──
   let timer: ReturnType<typeof setInterval> | undefined
-  if ((config.watchMs ?? 2000) > 0) {
+  if (selectedBackend === 'native' && (config.watchMs ?? 2000) > 0) {
     let watermark = -1 // -1 = initialize to MAX(ROWID) on first tick (no replay)
     timer = setInterval(() => void (async () => {
       try {
@@ -200,7 +216,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   })
 
   // Boot-time hardware key check (Linux only)
-  if (process.platform === 'linux' && !validateHardwareKey()) {
+  if (process.platform === 'linux' && !validateHardwareKey(stateDir)) {
     console.warn('[dsh-imessage] hardware key missing — run the ExtractKey tool on any Mac (see corten-matrix tools/) and place the output at:', join(stateDir, 'hardware-key.bin'))
   }
 }
