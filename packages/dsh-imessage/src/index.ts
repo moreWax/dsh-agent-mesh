@@ -21,9 +21,11 @@ import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { JsonFileView, toolPayload, type AgentMeshFace, type TaskServiceToolMount } from '@morewax/sam-mesh'
 import { keyTools } from './key-tools.js'
-import { createBackend, selectBackend, type BackendChoice } from './backends/select.js'
+import { selectBackend, platformOf, type BackendChoice, type SelectedBackend } from './backends/select.js'
+import { loadBackend } from './backends/load.js'
+import { BackendController } from './backends/controller.js'
+import { SetupStore } from './setup-store.js'
 import type { IMessageBackend } from './backends/interface.js'
-import { NativeBackend } from './backends/native.js'
 import { defaultAccess, isAllowed, type AccessFile } from './access.js'
 
 export const name = 'dsh-imessage'
@@ -32,6 +34,8 @@ export const inject = ['agentMesh', 'credentials']
 export interface Config {
   dbPath?: string
   stateDir?: string
+  /** Durable setup progress (default ~/.local/share/dsh-imessage). */
+  setupDir?: string
   allowSms?: boolean
   /** Inbound watch interval ms (default 2000; 0 disables inbound delivery). */
   watchMs?: number
@@ -48,6 +52,7 @@ export interface Config {
 export const Config: z<Config> = z.object({
   dbPath: z.string().default('~/Library/Messages/chat.db'),
   stateDir: z.string().default('~/.config/dsh-imessage'),
+  setupDir: z.string().default('~/.local/share/dsh-imessage'),
   allowSms: z.boolean().default(false),
   watchMs: z.natural().default(2000),
   signature: z.string().default('\nSent via the mesh'),
@@ -67,6 +72,7 @@ function validateHardwareKey(stateDir: string): boolean {
 export function apply(ctx: Context, config: Config = {}): void {
   const dbPath = (config.dbPath ?? '~/Library/Messages/chat.db').replace(/^~(?=\/)/, homedir())
   const stateDir = (config.stateDir ?? '~/.config/dsh-imessage').replace(/^~(?=\/)/, homedir())
+  const setupDir = (config.setupDir ?? '~/.local/share/dsh-imessage').replace(/^~(?=\/)/, homedir())
 
   // Linux setup is explicit and resumable — never install k3s or launch
   // workloads merely because a dsh profile booted. The UI/tools call the
@@ -76,26 +82,39 @@ export function apply(ctx: Context, config: Config = {}): void {
   const ownHandles = (config.ownHandles ?? []).map(h => h.trim().toLowerCase())
   const access = new JsonFileView<AccessFile>(join(stateDir, 'access.json'), raw => JSON.parse(raw) as AccessFile, defaultAccess(), async p => (await import('node:fs/promises')).stat(p))
 
-  const selectedBackend = selectBackend(config.backend ?? 'auto')
-  let backend: IMessageBackend | undefined
+  const controller = new BackendController()
+  const setupStore = new SetupStore(setupDir, platformOf())
+  let selectedBackend: SelectedBackend = selectBackend(config.backend ?? 'auto')
   let backendError: string | undefined
-  if (selectedBackend === 'native') {
-    try { backend = createBackend({ choice: 'native', native: { dbPath, allowSms } }); void backend.start().catch(error => { backendError = error instanceof Error ? error.message : String(error) }) }
-    catch (error) { backendError = error instanceof Error ? error.message : String(error) }
-  } else if (selectedBackend === 'matrix') {
-    // Matrix access tokens are references, never values in the profile config.
-    // The credential resolver is async; backend construction happens after the
-    // task-service injection below, where the same resolver is available.
-    const matrix = config.matrix
-    if (matrix?.homeserverUrl && matrix.accessTokenRef && matrix.roomId) {
-      void (ctx as Context & { credentials: { resolve(ref: unknown): Promise<{ value?: string } | undefined> } }).credentials.resolve(credentialRef(matrix.accessTokenRef)).then(async (resolved: { value?: string } | undefined) => {
-        if (resolved?.value) { backend = createBackend({ choice: 'matrix', matrix: { homeserverUrl: matrix.homeserverUrl!, accessToken: resolved.value, roomId: matrix.roomId! } }); await backend.start() }
-        else backendError = 'Matrix access token is not provisioned — store it through dsh credentials'
-      }).catch((error: unknown) => { backendError = error instanceof Error ? error.message : String(error) })
-    } else backendError = 'Linux iMessage backend needs Matrix homeserver URL, access-token reference, and room ID'
-  } else backendError = `iMessage is unsupported on this platform (${process.platform})`
+  let initialization: Promise<void> = Promise.resolve()
 
-  const requireBackend = (): IMessageBackend => backend ?? (() => { throw new Error(backendError ?? 'iMessage backend is still starting') })()
+  const initialize = async (): Promise<void> => {
+    const persisted = await setupStore.recoverInterrupted()
+    selectedBackend = selectBackend(config.backend, platformOf(), persisted.backend)
+    if (selectedBackend === 'native') {
+      await controller.replace(async () => await loadBackend('native', { native: { dbPath, allowSms } }))
+      return
+    }
+    if (selectedBackend === 'matrix') {
+      const matrix = config.matrix
+      if (!matrix?.homeserverUrl || !matrix.accessTokenRef || !matrix.roomId) {
+        backendError = 'Linux iMessage backend needs Matrix homeserver URL, access-token reference, and room ID'
+        return
+      }
+      const resolved = await (ctx as Context & { credentials: { resolve(ref: unknown): Promise<{ value?: string } | undefined> } }).credentials.resolve(credentialRef(matrix.accessTokenRef))
+      if (!resolved?.value) { backendError = 'Matrix access token is not provisioned — store it through dsh credentials'; return }
+      await controller.replace(async () => await loadBackend('matrix', { matrix: { homeserverUrl: matrix.homeserverUrl!, accessToken: resolved.value!, roomId: matrix.roomId! } }))
+      return
+    }
+    backendError = `iMessage is unsupported on this platform (${process.platform})`
+  }
+  initialization = initialize().catch((error: unknown) => { backendError = error instanceof Error ? error.message : String(error) })
+  const requireBackend = async (): Promise<IMessageBackend> => {
+    await initialization
+    const backend = controller.current()
+    if (!backend) throw new Error(backendError ?? 'iMessage backend is not configured')
+    return backend
+  }
 
   // ── dsh agent tools (registered on the local task service when present) ──
   const tools = [
@@ -108,14 +127,14 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (!chatGuid || !text.trim()) throw new Error('chat_guid and text are required')
         const files = Array.isArray(args.files) ? args.files.filter((f): f is string => typeof f === 'string') : []
         const signature = config.signature ?? ''
-        return await requireBackend().send({ conversationId: chatGuid, text: text + signature, files })
+        return await (await requireBackend()).send({ conversationId: chatGuid, text: text + signature, files })
       } },
     { name: 'imessage_read', description: 'Recent iMessage history as threads (all allowlisted chats, or one chat_guid). Oldest-first per chat.',
       auth: 'capability' as const, requiredScopes: ['tasks'],
       schema: { type: 'object', properties: { chat_guid: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: false },
       handler: async (args: { chat_guid?: unknown; limit?: unknown }) => {
         const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 200) : 100
-        const messages = await requireBackend().read({ ...(typeof args.chat_guid === 'string' ? { conversationId: args.chat_guid } : {}), limit })
+        const messages = await (await requireBackend()).read({ ...(typeof args.chat_guid === 'string' ? { conversationId: args.chat_guid } : {}), limit })
         const ac = await access.get()
         return { messages: messages.filter(m => isAllowed(m, ac, ownHandles)) }
       } },
@@ -126,7 +145,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const query = typeof args.query === 'string' ? args.query.trim() : ''
         if (!query) throw new Error('query is required')
         const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 50) : 25
-        const messages = await requireBackend().search({ query, limit })
+        const messages = await (await requireBackend()).search({ query, limit })
         const ac = await access.get()
         return { messages: messages.filter(m => isAllowed(m, ac, ownHandles)) }
       } },
@@ -151,11 +170,24 @@ export function apply(ctx: Context, config: Config = {}): void {
     { name: 'imessage_status', description: 'Show the selected iMessage backend and setup state.',
       auth: 'capability' as const, requiredScopes: ['tasks'],
       schema: { type: 'object', properties: {}, additionalProperties: false },
-      handler: async () => backend ? await backend.status() : ({ kind: selectedBackend, state: process.platform === 'linux' ? 'needs_setup' : 'unavailable', detail: backendError, retryable: true, hardwareKeyPresent: process.platform !== 'linux' || validateHardwareKey(stateDir) }) },
-    { name: 'imessage_setup_status', description: 'Show Linux Matrix/k3s setup requirements; read-only and safe to run at any time.',
+      handler: async () => { await initialization; return await controller.status() ?? ({ kind: selectedBackend, state: process.platform === 'linux' ? 'needs_setup' : 'unavailable', detail: backendError, retryable: true, hardwareKeyPresent: process.platform !== 'linux' || validateHardwareKey(stateDir) }) } },
+    { name: 'imessage_setup_status', description: 'Show persistent setup progress and requirements; read-only and safe to run at any time.',
       auth: 'capability' as const, requiredScopes: ['tasks'],
       schema: { type: 'object', properties: {}, additionalProperties: false },
-      handler: async () => ({ platform: process.platform, backend: selectedBackend, hardwareKeyPresent: validateHardwareKey(stateDir), matrixConfigured: Boolean(config.matrix?.homeserverUrl && config.matrix?.accessTokenRef && config.matrix?.roomId), runtime: 'explicit setup required — no k3s install occurs during plugin boot' }) },
+      handler: async () => ({ ...(await setupStore.read()), selectedBackend, hardwareKeyPresent: validateHardwareKey(stateDir), matrixConfigured: Boolean(config.matrix?.homeserverUrl && config.matrix?.accessTokenRef && config.matrix?.roomId), runtimePolicy: 'explicit setup required — no k3s install occurs during plugin boot' }) },
+    { name: 'imessage_setup_backend', description: 'Persist the setup backend choice. Explicit profile configuration still takes precedence.',
+      auth: 'operator' as const,
+      schema: { type: 'object', required: ['backend'], properties: { backend: { type: 'string', enum: ['auto', 'native', 'matrix'] } }, additionalProperties: false },
+      handler: async (args: { backend?: unknown }) => {
+        const choice = args.backend
+        if (choice !== 'auto' && choice !== 'native' && choice !== 'matrix') throw new Error('backend must be auto, native, or matrix')
+        const saved = await setupStore.update(current => ({ ...current, backend: choice }))
+        return { backend: saved.backend, selectedBackend: selectBackend(config.backend, platformOf(), saved.backend), restartRequired: true }
+      } },
+    { name: 'imessage_setup_cancel', description: 'Cancel the active setup step without deleting completed work, credentials, or data.',
+      auth: 'operator' as const,
+      schema: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => await setupStore.cancel() },
   ]
 
   if (config.fleetTools !== false) {
@@ -174,13 +206,15 @@ export function apply(ctx: Context, config: Config = {}): void {
     let watermark = -1 // -1 = initialize to MAX(ROWID) on first tick (no replay)
     timer = setInterval(() => void (async () => {
       try {
-        if (!(backend instanceof NativeBackend)) return
+        await initialization
+        const backend = controller.current() as (IMessageBackend & { getWatermark?: () => number; fetchSince?: (watermark: number) => Array<{ rowid: number; sender: string; isFromMe: boolean; participants: string[]; chatTitle: string | null; text: string | null; attachmentPath?: string; chatGuid: string }>; decorate?: (messages: never[]) => Promise<Array<{ rowid: number; sender: string; isFromMe: boolean; participants: string[]; chatTitle: string | null; text: string | null; attachmentPath?: string; chatGuid: string }>> }) | undefined
+        if (!backend?.getWatermark || !backend.fetchSince || !backend.decorate) return
         if (watermark < 0) { watermark = backend.getWatermark(); return }
         const fresh = backend.fetchSince(watermark)
         if (fresh.length === 0) return
         watermark = fresh[fresh.length - 1]!.rowid
         const ac = await access.get()
-        const allowed = (await backend.decorate(fresh)).filter(m => isAllowed(m, ac, ownHandles))
+        const allowed = (await backend.decorate(fresh as never[])).filter(m => isAllowed(m, ac, ownHandles))
         if (allowed.length === 0) return
         const chat = (ctx as unknown as { get?(name: string): unknown }).get?.('agentMeshChat') as { postSystem?(text: string, meta?: unknown): void } | undefined
         for (const m of allowed) {
@@ -194,7 +228,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   ctx.effect(() => () => {
     if (timer) clearInterval(timer)
-    void backend?.stop()
+    void controller.stop()
   })
 
   // Boot-time hardware key check (Linux only)

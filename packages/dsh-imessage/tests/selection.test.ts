@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFile } from 'node:fs/promises'
 import { platformOf, selectBackend } from '../src/backends/select.js'
 import { nextSetupActions, setupState } from '../src/setup.js'
 
@@ -10,6 +11,16 @@ describe('backend selection', () => {
     expect(selectBackend('auto', 'linux')).toBe('matrix')
     expect(selectBackend('native', 'linux')).toBe('unsupported')
     expect(selectBackend('matrix', 'darwin')).toBe('unsupported')
+    expect(selectBackend(undefined, 'linux', 'matrix')).toBe('matrix')
+    expect(selectBackend('native', 'linux', 'matrix')).toBe('unsupported') // explicit profile wins
+  })
+  it('keeps the pure selector free of platform implementation imports', async () => {
+    const selector = await readFile(new URL('../src/backends/select.ts', import.meta.url), 'utf8')
+    const entry = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
+    expect(selector).not.toContain("./native.js")
+    expect(selector).not.toContain("./bridge.js")
+    expect(entry).not.toContain("./backends/native.js")
+    expect(entry).not.toContain("./backends/bridge.js")
   })
 })
 
